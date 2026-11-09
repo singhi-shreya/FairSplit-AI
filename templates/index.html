@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FairSplit AI - Group Bill Splitter</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <!-- Google Fonts for clean typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-container">
+            <div class="logo-area">
+                <span class="logo-icon">🧾</span>
+                <div>
+                    <h1>FairSplit <span class="accent-text">AI</span></h1>
+                    <p class="tagline">Smart &amp; Fair Restaurant Expense Splitter</p>
+                </div>
+            </div>
+            <span class="badge phase-badge">⚡ Fast Gemini 3.5 AI</span>
+        </div>
+    </header>
+
+    <main class="main-container">
+        <!-- Error / Info Notification Banner -->
+        <div id="alertBox" class="alert hidden" role="alert"></div>
+
+        <!-- Mode Navigation Switcher: Two Completely Separate Workflows -->
+        <div class="mode-navigation-bar">
+            <button type="button" class="mode-nav-btn active" id="navManualModeBtn">
+                <span class="mode-nav-icon">✍️</span>
+                <span class="mode-nav-text">
+                    <strong>Mode 1: Manual Entry</strong>
+                    <small>Step-by-step form &amp; custom sharing</small>
+                </span>
+            </button>
+            <button type="button" class="mode-nav-btn" id="navAiModeBtn">
+                <span class="mode-nav-icon">✨</span>
+                <span class="mode-nav-text">
+                    <strong>Mode 2: AI Bill Entry</strong>
+                    <small>One-box natural language description</small>
+                </span>
+            </button>
+        </div>
+
+        <div class="grid-layout">
+            <!-- Left Column: Inputs & Group Setup -->
+            <div class="input-column">
+                
+                <!-- ============================================== -->
+                <!-- WORKFLOW 1: MANUAL ENTRY (100% PRESERVED)      -->
+                <!-- ============================================== -->
+                <div id="manualModeWorkflow" class="mode-workflow-container">
+                    
+                    <!-- Section 1: Group Members -->
+                    <section class="card">
+                        <div class="card-header">
+                            <span class="step-num">1</span>
+                            <h2>Group Members</h2>
+                        </div>
+                        <p class="section-desc">Who is sharing this meal? Add everyone's name below.</p>
+                        
+                        <form id="addMemberForm" class="inline-form">
+                            <input 
+                                type="text" 
+                                id="memberNameInput" 
+                                placeholder="Enter name (e.g., Sneha)" 
+                                autocomplete="off"
+                                required
+                            >
+                            <button type="submit" class="btn btn-primary">Add Member</button>
+                        </form>
+
+                        <div id="membersList" class="chips-container">
+                            <span class="empty-state-text" id="emptyMembersText">No members added yet.</span>
+                        </div>
+                    </section>
+
+                    <!-- Section 2: Bill Items -->
+                    <section class="card">
+                        <div class="card-header">
+                            <span class="step-num">2</span>
+                            <h2>Bill Items</h2>
+                        </div>
+                        <p class="section-desc">Enter each dish or drink, its price in INR, and select who shared it.</p>
+
+                        <div id="manualEntryContainer" class="entry-mode-panel">
+                            <form id="addItemForm" class="stack-form">
+                                <div class="form-row">
+                                    <div class="form-group flex-2">
+                                        <label for="itemNameInput">Item Description</label>
+                                        <input 
+                                            type="text" 
+                                            id="itemNameInput" 
+                                            placeholder="e.g., Margherita Pizza" 
+                                            autocomplete="off"
+                                            required
+                                        >
+                                    </div>
+                                    <div class="form-group flex-1">
+                                        <label for="itemPriceInput">Price (₹)</label>
+                                        <input 
+                                            type="number" 
+                                            id="itemPriceInput" 
+                                            placeholder="0.00" 
+                                            step="0.01" 
+                                            min="0.01" 
+                                            required
+                                        >
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <div class="label-with-actions">
+                                        <label>Shared By (Manual Selection):</label>
+                                        <div class="quick-select">
+                                            <button type="button" class="text-btn" id="selectAllMembersBtn">Select All</button>
+                                            <span>•</span>
+                                            <button type="button" class="text-btn" id="clearSelectedMembersBtn">Clear</button>
+                                        </div>
+                                    </div>
+                                    <div id="itemShareCheckboxes" class="checkbox-group">
+                                        <span class="empty-state-text">Add group members above first.</span>
+                                    </div>
+                                </div>
+
+                                <button type="submit" class="btn btn-secondary" id="addItemBtn">
+                                    + Add Item to Bill
+                                </button>
+                            </form>
+                        </div>
+
+                        <!-- Items Table/List -->
+                        <div class="items-list-section">
+                            <h3>Added Items (<span id="itemsCount">0</span>)</h3>
+                            <div id="itemsContainer" class="items-container">
+                                <p class="empty-state-text" id="emptyItemsText">No items entered yet.</p>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- Section 3: Tax & Tip -->
+                    <section class="card">
+                        <div class="card-header">
+                            <span class="step-num">3</span>
+                            <h2>Tax &amp; Tip (Optional)</h2>
+                        </div>
+                        <p class="section-desc">Tax and tip will be split proportionally based on what each person ordered.</p>
+
+                        <div class="form-row">
+                            <div class="form-group flex-1">
+                                <label for="taxInput">Tax (%)</label>
+                                <input 
+                                    type="number" 
+                                    id="taxInput" 
+                                    placeholder="0.0" 
+                                    step="0.1" 
+                                    min="0" 
+                                    value="0"
+                                >
+                            </div>
+                            <div class="form-group flex-1">
+                                <label for="tipInput">Tip (%)</label>
+                                <input 
+                                    type="number" 
+                                    id="tipInput" 
+                                    placeholder="0.0" 
+                                    step="0.5" 
+                                    min="0" 
+                                    value="0"
+                                >
+                            </div>
+                        </div>
+
+                        <div class="quick-tips">
+                            <span class="quick-tip-label">Quick Tip:</span>
+                            <button type="button" class="btn-chip tip-chip" data-tip="10">10%</button>
+                            <button type="button" class="btn-chip tip-chip" data-tip="15">15%</button>
+                            <button type="button" class="btn-chip tip-chip" data-tip="18">18%</button>
+                            <button type="button" class="btn-chip tip-chip" data-tip="20">20%</button>
+                            <button type="button" class="btn-chip tip-chip" data-tip="0">None</button>
+                        </div>
+                    </section>
+
+                    <!-- Calculate Action Bar -->
+                    <div class="action-bar">
+                        <button type="button" id="calculateBtn" class="btn btn-action">
+                            Calculate Fair Split ⚡
+                        </button>
+                        <button type="button" id="resetBtn" class="btn btn-outline">
+                            Reset All
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ============================================== -->
+                <!-- WORKFLOW 2: AI-POWERED BILL ENTRY (ONE BOX)    -->
+                <!-- ============================================== -->
+                <div id="aiModeWorkflow" class="mode-workflow-container hidden">
+                    
+                    <!-- AI Step 1: Natural Language Prompt or Receipt Scan -->
+                    <section class="card ai-card">
+                        <div class="card-header">
+                            <span class="step-num ai-step-num">✨</span>
+                            <div>
+                                <h2>AI Bill Entry (Text or Receipt Scan)</h2>
+                            </div>
+                        </div>
+                        <p class="section-desc">
+                            Describe your meal in plain words, or upload a photo of your dining receipt for instant AI scanning!
+                        </p>
+
+                        <!-- Sub-tab switcher inside Mode 2 -->
+                        <div class="ai-mode-tabs">
+                            <button type="button" class="ai-tab-btn active" id="tabTextModeBtn">
+                                ✍️ Describe in Words
+                            </button>
+                            <button type="button" class="ai-tab-btn" id="tabReceiptModeBtn">
+                                📸 Scan Receipt Photo
+                            </button>
+                        </div>
+
+                        <!-- Subpanel A: Text Description (Preserved) -->
+                        <div id="aiTextEntryPanel" class="ai-subpanel">
+                            <!-- Speaker Name Hint (for "I" or "me") -->
+                            <div class="form-group speaker-hint-box">
+                                <label for="aiSpeakerInput">
+                                    <strong>Your Name</strong> 
+                                    <span class="optional-label">(Optional — tells AI who "I", "me", or "my" refers to)</span>
+                                </label>
+                                <input 
+                                    type="text" 
+                                    id="aiSpeakerInput" 
+                                    placeholder="e.g., Sneha" 
+                                    autocomplete="off"
+                                >
+                            </div>
+
+                            <!-- Sample Examples Chips -->
+                            <div class="ai-sample-chip-wrapper">
+                                <span class="sample-label">Try an example:</span>
+                                <div class="example-chips-group">
+                                    <button type="button" class="example-chip-btn" id="samplePromptBtn1">
+                                        🍕 "Rahul ate pizza which was 600 rupees, Priya and I shared 400 rupees pasta, and we all shared Coke worth 180 rupees."
+                                    </button>
+                                    <button type="button" class="example-chip-btn" id="samplePromptBtn2">
+                                        ☕ "Amit had biryani for 380, Pooja had dosa for 160, and we both shared kulfi for 140"
+                                    </button>
+                                    <button type="button" class="example-chip-btn" id="samplePromptBtn3">
+                                        ⚠️ "Rahul had burger for 250, Priya had pasta for 350, and I had dessert"
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- AI Description Textarea -->
+                            <div class="ai-input-group">
+                                <label for="aiDescriptionInput" class="sr-only">Bill Description</label>
+                                <textarea 
+                                    id="aiDescriptionInput" 
+                                    class="ai-textarea" 
+                                    placeholder='Type naturally, e.g. "Rahul ate pizza which was 600 rupees, Priya and I shared 400 rupees pasta, and we all shared Coke worth 180 rupees."' 
+                                    rows="4"
+                                ></textarea>
+                                
+                                <div class="ai-btn-row">
+                                    <button type="button" id="aiInterpretBtn" class="btn btn-ai-primary">
+                                        ⚡ Interpret Bill with AI
+                                    </button>
+                                    <button type="button" id="aiClearPromptBtn" class="btn btn-outline btn-sm">
+                                        Clear Text
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Subpanel B: Receipt Scanning (New Feature) -->
+                        <div id="aiReceiptEntryPanel" class="ai-subpanel hidden">
+                            <!-- Optional: Group Members Splitting this Receipt -->
+                            <div class="form-group speaker-hint-box">
+                                <label for="aiReceiptMembersInput">
+                                    <strong>Group Members Splitting This Receipt</strong> 
+                                    <span class="optional-label">(Optional — enter names separated by commas, e.g. Rahul, Priya, Sneha)</span>
+                                </label>
+                                <input 
+                                    type="text" 
+                                    id="aiReceiptMembersInput" 
+                                    placeholder="e.g., Rahul, Priya, Sneha" 
+                                    autocomplete="off"
+                                >
+                            </div>
+
+                            <!-- Drag & Drop Upload Dropzone -->
+                            <div id="receiptDropzone" class="receipt-dropzone">
+                                <input 
+                                    type="file" 
+                                    id="receiptFileInput" 
+                                    accept="image/jpeg,image/jpg,image/png,image/webp" 
+                                    class="hidden-file-input"
+                                >
+                                
+                                <!-- Dropzone Default View -->
+                                <div id="dropzonePrompt" class="dropzone-content">
+                                    <span class="dropzone-icon">🧾</span>
+                                    <h4>Upload or Drag &amp; Drop Receipt Photo</h4>
+                                    <p>Supports clear photos in <strong>JPG, JPEG, or PNG</strong> (up to 10 MB)</p>
+                                    <button type="button" id="browseReceiptBtn" class="btn btn-secondary btn-sm dropzone-browse-btn">
+                                        📁 Browse Receipt File
+                                    </button>
+                                </div>
+
+                                <!-- Receipt Image Preview (Visible when file is chosen) -->
+                                <div id="receiptPreviewBox" class="receipt-preview-box hidden">
+                                    <div class="receipt-img-wrapper">
+                                        <img id="receiptPreviewImg" src="" alt="Receipt Preview">
+                                    </div>
+                                    <div class="receipt-preview-details">
+                                        <div class="receipt-file-meta">
+                                            <span id="receiptFileName" class="file-name">receipt.jpg</span>
+                                            <span id="receiptFileSize" class="file-size">0 KB</span>
+                                        </div>
+                                        <div class="receipt-preview-actions">
+                                            <button type="button" id="replaceReceiptBtn" class="btn btn-outline btn-sm">
+                                                🔄 Replace
+                                            </button>
+                                            <button type="button" id="removeReceiptBtn" class="btn btn-outline btn-sm btn-danger-text">
+                                                ✕ Remove
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Action button for receipt scan -->
+                            <div class="ai-btn-row">
+                                <button type="button" id="scanReceiptBtn" class="btn btn-ai-primary" disabled>
+                                    📸 Scan Receipt with Gemini
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- AI Loading Indicator with live timer -->
+                        <div id="aiLoadingIndicator" class="ai-status-box hidden">
+                            <span class="spinner"></span>
+                            <span id="aiLoadingStatusText">Interpreting bill with fast Gemini AI...</span>
+                            <span id="aiTimerBadge" class="timer-badge">0.0s</span>
+                        </div>
+
+                        <!-- AI Clarification & Ambiguity Notice -->
+                        <div id="aiClarificationBox" class="ai-clarification-box hidden">
+                            <div class="ai-clarification-title">
+                                <span>⚠️</span>
+                                <span>Clarification &amp; Missing Info Detected</span>
+                            </div>
+                            <ul id="aiClarificationList"></ul>
+                        </div>
+                    </section>
+
+                    <!-- AI Step 2: Interactive Review & Confirm Card -->
+                    <section id="aiReviewSection" class="card ai-review-card hidden">
+                        <div class="card-header">
+                            <span class="step-num">✓</span>
+                            <div>
+                                <h2>Review &amp; Edit Extracted Bill</h2>
+                            </div>
+                        </div>
+                        <p class="section-desc">
+                            Review the extracted information below. <strong>You can edit any dish name, price, quantity, or participant before confirming!</strong>
+                        </p>
+
+                        <!-- Restaurant Banner (Shown if detected from receipt) -->
+                        <div id="aiRestaurantBanner" class="ai-restaurant-banner hidden">
+                            <span class="restaurant-icon">📍</span>
+                            <span class="restaurant-label">Restaurant:</span>
+                            <strong id="aiRestaurantName">Restaurant</strong>
+                        </div>
+
+                        <!-- Extracted Members -->
+                        <div class="review-block">
+                            <div class="review-block-header">
+                                <h3>Extracted Group Members (<span id="aiMembersCount">0</span>)</h3>
+                            </div>
+                            <div id="aiMembersList" class="chips-container"></div>
+                            
+                            <!-- Add Missing Member Inline -->
+                            <form id="aiAddMemberForm" class="inline-form add-member-inline">
+                                <input 
+                                    type="text" 
+                                    id="aiAddMemberInput" 
+                                    placeholder="Add missing person (e.g. Rahul)" 
+                                    autocomplete="off"
+                                >
+                                <button type="submit" class="btn btn-secondary btn-sm">+ Add Person</button>
+                            </form>
+                        </div>
+
+                        <!-- Extracted Food Items -->
+                        <div class="review-block">
+                            <div class="review-block-header">
+                                <h3>Extracted Food Items &amp; Participants</h3>
+                                <button type="button" id="aiAddNewItemBtn" class="btn btn-secondary btn-sm">+ Add Item</button>
+                            </div>
+                            <p class="review-sub-hint">Click member badges to toggle who shared each item:</p>
+                            <div id="aiItemsContainer" class="ai-items-container"></div>
+                        </div>
+
+                        <!-- Subtotal, Tax & Tip -->
+                        <div class="review-block review-totals-block">
+                            <div class="review-subtotal-bar">
+                                <span>Items Subtotal:</span>
+                                <strong id="aiItemsSubtotal">₹0.00</strong>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group flex-1">
+                                    <label for="aiTaxInput">Tax (%)</label>
+                                    <input 
+                                        type="number" 
+                                        id="aiTaxInput" 
+                                        placeholder="0.0" 
+                                        step="0.1" 
+                                        min="0" 
+                                        value="0"
+                                    >
+                                </div>
+                                <div class="form-group flex-1">
+                                    <label for="aiTipInput">Tip (%)</label>
+                                    <input 
+                                        type="number" 
+                                        id="aiTipInput" 
+                                        placeholder="0.0" 
+                                        step="0.5" 
+                                        min="0" 
+                                        value="0"
+                                    >
+                                </div>
+                            </div>
+
+                            <div class="quick-tips">
+                                <span class="quick-tip-label">Quick Tip:</span>
+                                <button type="button" class="btn-chip ai-tip-chip" data-tip="10">10%</button>
+                                <button type="button" class="btn-chip ai-tip-chip" data-tip="15">15%</button>
+                                <button type="button" class="btn-chip ai-tip-chip" data-tip="18">18%</button>
+                                <button type="button" class="btn-chip ai-tip-chip" data-tip="20">20%</button>
+                                <button type="button" class="btn-chip ai-tip-chip" data-tip="0">None</button>
+                            </div>
+                        </div>
+
+                        <!-- Confirm Actions -->
+                        <div class="action-bar ai-action-bar">
+                            <button type="button" id="aiConfirmCalculateBtn" class="btn btn-action">
+                                ✓ Confirm &amp; Calculate Split ⚡
+                            </button>
+                            <button type="button" id="aiCopyToManualBtn" class="btn btn-outline" title="Copy these items into Manual Mode">
+                                📋 Copy to Manual Mode
+                            </button>
+                            <button type="button" id="aiResetBtn" class="btn btn-outline">
+                                ↺ Reset
+                            </button>
+                        </div>
+                    </section>
+                </div>
+
+            </div>
+
+            <!-- Right Column: Results & Breakdown (Shared by both modes) -->
+            <div class="results-column">
+                <section class="card results-card" id="resultsSection">
+                    <div class="card-header">
+                        <span class="step-num">4</span>
+                        <h2>Settlement Breakdown</h2>
+                    </div>
+                    
+                    <div id="resultsPlaceholder" class="placeholder-box">
+                        <div class="placeholder-icon">🧾</div>
+                        <h3>No Calculation Yet</h3>
+                        <p>Enter your meal using <strong>Manual Entry</strong> or <strong>AI Bill Entry</strong> on the left, then click Calculate to see exact per-person shares.</p>
+                    </div>
+
+                    <div id="resultsContent" class="hidden">
+                        <!-- Overall Summary Banner -->
+                        <div class="summary-banner">
+                            <div class="summary-metric">
+                                <span class="metric-label">Items Subtotal</span>
+                                <span class="metric-value" id="summarySubtotal">₹0.00</span>
+                            </div>
+                            <div class="summary-metric">
+                                <span class="metric-label" id="summaryTaxLabel">Tax</span>
+                                <span class="metric-value" id="summaryTax">₹0.00</span>
+                            </div>
+                            <div class="summary-metric">
+                                <span class="metric-label" id="summaryTipLabel">Tip</span>
+                                <span class="metric-value" id="summaryTip">₹0.00</span>
+                            </div>
+                            <div class="summary-metric grand-total-metric">
+                                <span class="metric-label">Grand Total</span>
+                                <span class="metric-value" id="summaryGrandTotal">₹0.00</span>
+                            </div>
+                        </div>
+
+                        <!-- Individual Member Breakdown Cards -->
+                        <h3 class="breakdown-title">Who Owes What</h3>
+                        <div id="breakdownCardsContainer" class="breakdown-grid"></div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </main>
+
+    <footer class="app-footer">
+        <p>FairSplit AI • Built for the <strong>PayPal AI Hackathon</strong> • Fast Gemini AI &amp; Exact Integer-Paise Math</p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
