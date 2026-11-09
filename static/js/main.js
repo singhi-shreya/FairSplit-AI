@@ -1,22 +1,26 @@
 /**
- * FairSplit AI - Frontend Application Logic
+ * FairSplit AI - Frontend Application Logic (Fintech Redesign)
  * 
  * Manages:
+ * - Real Fintech Dashboard with live stats (Total Bills, Total Expenses, Pending Payments)
+ * - Local history persistence with zero fake stats & settlement status tracking
+ * - Left Sidebar Navigation & View Router (Dashboard, Create Split, History, Settings)
  * - TWO INDEPENDENT WORKFLOWS:
  *   1. Mode 1: Manual Step-by-Step Entry (100% preserved)
- *   2. Mode 2: AI-Powered Bill Entry (One-sentence description -> review -> calculation)
- * - Group members management & sharing checkboxes
- * - Interactive review cards with clickable participant toggle badges
- * - Missing price validation & pronoun ("I") clarification
- * - Authoritative Python calculation engine (/api/calculate) with exact integer-paise math
+ *   2. Mode 2: AI-Powered Bill Entry (Natural language & Receipt Photo Vision)
+ * - Interactive review cards with participant toggle chips
+ * - Precision Python calculation engine (/api/calculate) with integer-paise math
  * - Live latency counter for fast Gemini API extraction
+ * - Mobile responsive drawer navigation & Lucide icons
  */
 
 // ==========================================
-// 1. Application State
+// 1. Storage & Persistence Keys
 // ==========================================
+const STORAGE_BILLS_KEY = 'fairsplit_bills_history';
+const STORAGE_USER_KEY = 'fairsplit_speaker_name';
 
-// State for Mode 1 (Manual Entry)
+// Application State for Mode 1 (Manual Entry)
 const state = {
     members: [],
     items: [],
@@ -24,31 +28,71 @@ const state = {
     editingItemId: null
 };
 
-// State for Mode 2 (AI-Powered Entry)
+// Application State for Mode 2 (AI-Powered Entry)
 const aiState = {
     members: [],
     items: [],
     nextItemId: 1,
     tax: 0.0,
-    tip: 0.0
+    tip: 0.0,
+    restaurantName: ''
 };
 
-// Concurrency Guard to prevent duplicate submissions
+// Currently Active Calculation Session
+let currentBillSession = null;
+let currentFilter = 'all';
+
+// Concurrency Guards
 let isCalculating = false;
 let isAiInterpreting = false;
+let isScanningReceipt = false;
+let currentReceiptFile = null;
 
 // ==========================================
-// 2. DOM Elements
+// 2. DOM Elements Selection
 // ==========================================
 
-// Mode Navigation Elements
+// Views
+const viewDashboard = document.getElementById('viewDashboard');
+const viewCreateSplit = document.getElementById('viewCreateSplit');
+const viewHistory = document.getElementById('viewHistory');
+const viewSettings = document.getElementById('viewSettings');
+
+// Sidebar Nav Buttons
+const sidebarNavDashboard = document.getElementById('sidebarNavDashboard');
+const sidebarNavCreate = document.getElementById('sidebarNavCreate');
+const sidebarNavHistory = document.getElementById('sidebarNavHistory');
+const sidebarNavSettings = document.getElementById('sidebarNavSettings');
+const historyCounterBadge = document.getElementById('historyCounterBadge');
+
+// Mobile Nav Elements
+const mobileMenuToggle = document.getElementById('mobileMenuToggle');
+const appSidebar = document.getElementById('appSidebar');
+const sidebarBackdrop = document.getElementById('sidebarBackdrop');
+
+// Dashboard Elements
+const heroHeading = document.getElementById('heroHeading');
+const heroGreetingTime = document.getElementById('heroGreetingTime');
+const dashboardCreateSplitBtn = document.getElementById('dashboardCreateSplitBtn');
+const dashTotalBills = document.getElementById('dashTotalBills');
+const dashTotalBillsSubtitle = document.getElementById('dashTotalBillsSubtitle');
+const dashTotalExpenses = document.getElementById('dashTotalExpenses');
+const dashPendingAmount = document.getElementById('dashPendingAmount');
+const dashPendingBadge = document.getElementById('dashPendingBadge');
+const recentBillsContainer = document.getElementById('recentBillsContainer');
+const viewAllBillsLink = document.getElementById('viewAllBillsLink');
+
+// Quick Actions
+const quickActionManual = document.getElementById('quickActionManual');
+const quickActionAi = document.getElementById('quickActionAi');
+const quickActionReceipt = document.getElementById('quickActionReceipt');
+
+// Create Split View Controls
+const createSplitBackBtn = document.getElementById('createSplitBackBtn');
 const navManualModeBtn = document.getElementById('navManualModeBtn');
 const navAiModeBtn = document.getElementById('navAiModeBtn');
 const manualModeWorkflow = document.getElementById('manualModeWorkflow');
 const aiModeWorkflow = document.getElementById('aiModeWorkflow');
-
-// Notification Alert Box
-const alertBox = document.getElementById('alertBox');
 
 // Mode 1: Manual Entry Elements
 const memberNameInput = document.getElementById('memberNameInput');
@@ -83,23 +127,7 @@ const aiTimerBadge = document.getElementById('aiTimerBadge');
 const aiClarificationBox = document.getElementById('aiClarificationBox');
 const aiClarificationList = document.getElementById('aiClarificationList');
 
-// AI Review Section Elements
-const aiReviewSection = document.getElementById('aiReviewSection');
-const aiMembersCount = document.getElementById('aiMembersCount');
-const aiMembersList = document.getElementById('aiMembersList');
-const aiAddMemberForm = document.getElementById('aiAddMemberForm');
-const aiAddMemberInput = document.getElementById('aiAddMemberInput');
-const aiItemsContainer = document.getElementById('aiItemsContainer');
-const aiAddNewItemBtn = document.getElementById('aiAddNewItemBtn');
-const aiItemsSubtotal = document.getElementById('aiItemsSubtotal');
-const aiTaxInput = document.getElementById('aiTaxInput');
-const aiTipInput = document.getElementById('aiTipInput');
-const aiTipChips = document.querySelectorAll('.ai-tip-chip');
-const aiConfirmCalculateBtn = document.getElementById('aiConfirmCalculateBtn');
-const aiCopyToManualBtn = document.getElementById('aiCopyToManualBtn');
-const aiResetBtn = document.getElementById('aiResetBtn');
-
-// Mode 2: AI Sub-Tabs and Panels
+// AI Sub-tabs
 const tabTextModeBtn = document.getElementById('tabTextModeBtn');
 const tabReceiptModeBtn = document.getElementById('tabReceiptModeBtn');
 const aiTextEntryPanel = document.getElementById('aiTextEntryPanel');
@@ -119,20 +147,30 @@ const replaceReceiptBtn = document.getElementById('replaceReceiptBtn');
 const removeReceiptBtn = document.getElementById('removeReceiptBtn');
 const scanReceiptBtn = document.getElementById('scanReceiptBtn');
 
-// Restaurant Banner
+// AI Review Section Elements
+const aiReviewSection = document.getElementById('aiReviewSection');
 const aiRestaurantBanner = document.getElementById('aiRestaurantBanner');
 const aiRestaurantName = document.getElementById('aiRestaurantName');
-
-// State for receipt upload
-let currentReceiptFile = null;
-let isScanningReceipt = false;
+const aiMembersCount = document.getElementById('aiMembersCount');
+const aiMembersList = document.getElementById('aiMembersList');
+const aiAddMemberForm = document.getElementById('aiAddMemberForm');
+const aiAddMemberInput = document.getElementById('aiAddMemberInput');
+const aiItemsContainer = document.getElementById('aiItemsContainer');
+const aiAddNewItemBtn = document.getElementById('aiAddNewItemBtn');
+const aiItemsSubtotal = document.getElementById('aiItemsSubtotal');
+const aiTaxInput = document.getElementById('aiTaxInput');
+const aiTipInput = document.getElementById('aiTipInput');
+const aiTipChips = document.querySelectorAll('.ai-tip-chip');
+const aiConfirmCalculateBtn = document.getElementById('aiConfirmCalculateBtn');
+const aiCopyToManualBtn = document.getElementById('aiCopyToManualBtn');
+const aiResetBtn = document.getElementById('aiResetBtn');
 
 // Sample Prompt Buttons
 const samplePromptBtn1 = document.getElementById('samplePromptBtn1');
 const samplePromptBtn2 = document.getElementById('samplePromptBtn2');
 const samplePromptBtn3 = document.getElementById('samplePromptBtn3');
 
-// Results & Breakdown Elements (Shared by both modes)
+// Results & Breakdown Elements
 const resultsPlaceholder = document.getElementById('resultsPlaceholder');
 const resultsContent = document.getElementById('resultsContent');
 const summarySubtotal = document.getElementById('summarySubtotal');
@@ -142,15 +180,30 @@ const summaryTip = document.getElementById('summaryTip');
 const summaryTipLabel = document.getElementById('summaryTipLabel');
 const summaryGrandTotal = document.getElementById('summaryGrandTotal');
 const breakdownCardsContainer = document.getElementById('breakdownCardsContainer');
+const settlementProgressRatio = document.getElementById('settlementProgressRatio');
+const settlementProgressBar = document.getElementById('settlementProgressBar');
+const copySplitSummaryBtn = document.getElementById('copySplitSummaryBtn');
+const saveSplitToHistoryBtn = document.getElementById('saveSplitToHistoryBtn');
+
+// History View Elements
+const fullHistoryContainer = document.getElementById('fullHistoryContainer');
+const historyFilteredCount = document.getElementById('historyFilteredCount');
+const historyFilterPills = document.querySelectorAll('.filter-pill');
+const historyNewSplitBtn = document.getElementById('historyNewSplitBtn');
+
+// Settings Elements
+const settingsSpeakerInput = document.getElementById('settingsSpeakerInput');
+const saveSpeakerSettingBtn = document.getElementById('saveSpeakerSettingBtn');
+const clearAllHistoryBtn = document.getElementById('clearAllHistoryBtn');
+const sidebarUserName = document.getElementById('sidebarUserName');
+const sidebarUserAvatar = document.getElementById('sidebarUserAvatar');
+const toastContainer = document.getElementById('toastContainer');
+const alertBox = document.getElementById('alertBox');
 
 // ==========================================
-// 3. Formatting & Alert Helpers
+// 3. Formatting, Toasts & Alert Helpers
 // ==========================================
 
-/**
- * Formats a numeric value into standard Indian Rupees (INR, ₹).
- * Example: 1430 -> "₹1,430.00"
- */
 function formatINR(amount) {
     const num = Number(amount) || 0;
     return '₹' + num.toLocaleString('en-IN', {
@@ -159,24 +212,44 @@ function formatINR(amount) {
     });
 }
 
-let alertTimeout = null;
+function showToast(message, type = 'success') {
+    if (!toastContainer) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    
+    let iconName = 'check-circle';
+    if (type === 'error') iconName = 'alert-circle';
+    else if (type === 'info') iconName = 'info';
+
+    toast.innerHTML = `
+        <i data-lucide="${iconName}" class="toast-icon"></i>
+        <span>${escapeHtml(message)}</span>
+    `;
+
+    toastContainer.appendChild(toast);
+    refreshIcons();
+
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(10px)';
+        toast.style.transition = 'all 0.25s ease';
+        setTimeout(() => toast.remove(), 250);
+    }, 4000);
+}
 
 function showAlert(message, type = 'error') {
-    if (alertTimeout) clearTimeout(alertTimeout);
-
-    alertBox.textContent = message;
-    alertBox.className = `alert alert-${type}`;
-    alertBox.classList.remove('hidden');
-    alertBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-
-    alertTimeout = setTimeout(() => {
-        alertBox.classList.add('hidden');
-    }, 7000);
+    showToast(message, type);
+    if (alertBox) {
+        alertBox.textContent = message;
+        alertBox.className = `alert alert-${type}`;
+        alertBox.classList.remove('hidden');
+        setTimeout(() => alertBox.classList.add('hidden'), 6000);
+    }
 }
 
 function hideAlert() {
-    if (alertTimeout) clearTimeout(alertTimeout);
-    alertBox.classList.add('hidden');
+    if (alertBox) alertBox.classList.add('hidden');
 }
 
 function escapeHtml(str) {
@@ -189,8 +262,322 @@ function escapeHtml(str) {
         .replace(/'/g, '&#039;');
 }
 
+function refreshIcons() {
+    if (window.lucide && typeof window.lucide.createIcons === 'function') {
+        window.lucide.createIcons();
+    }
+}
+
 // ==========================================
-// 4. Mode Switcher (Mode 1 Manual vs Mode 2 AI)
+// 4. LocalStorage & Real Data Persistence
+// ==========================================
+
+function getBillsHistory() {
+    try {
+        const raw = localStorage.getItem(STORAGE_BILLS_KEY);
+        return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+        console.error('Failed to parse bills history from localStorage', e);
+        return [];
+    }
+}
+
+function saveBillsHistory(bills) {
+    try {
+        localStorage.setItem(STORAGE_BILLS_KEY, JSON.stringify(bills));
+        updateHistoryBadge();
+        updateDashboardStats();
+    } catch (e) {
+        console.error('Failed to save bills history', e);
+    }
+}
+
+function saveBillRecord(billData) {
+    const bills = getBillsHistory();
+    const existingIdx = bills.findIndex(b => b.id === billData.id);
+
+    if (existingIdx >= 0) {
+        bills[existingIdx] = billData;
+    } else {
+        bills.unshift(billData); // Newest first
+    }
+
+    saveBillsHistory(bills);
+    return billData;
+}
+
+function deleteBillRecord(billId) {
+    let bills = getBillsHistory();
+    bills = bills.filter(b => b.id !== billId);
+    saveBillsHistory(bills);
+    renderRecentBills();
+    renderFullHistory(currentFilter);
+    showToast('Bill removed from history', 'info');
+}
+
+function updateHistoryBadge() {
+    const bills = getBillsHistory();
+    if (historyCounterBadge) {
+        historyCounterBadge.textContent = bills.length;
+    }
+}
+
+// ==========================================
+// 5. Dashboard Real Statistics & Recent Bills
+// ==========================================
+
+function updateDashboardStats() {
+    const bills = getBillsHistory();
+    const count = bills.length;
+
+    // Total Bills
+    if (dashTotalBills) dashTotalBills.textContent = count;
+    if (dashTotalBillsSubtitle) {
+        dashTotalBillsSubtitle.textContent = count === 1 ? '1 bill recorded' : `${count} bills recorded`;
+    }
+
+    // Total Expenses
+    let totalRupees = 0;
+    let pendingRupees = 0;
+    let pendingCount = 0;
+
+    bills.forEach(bill => {
+        const gt = bill.summary?.grand_total || 0;
+        totalRupees += Number(gt);
+
+        if (bill.settlement && bill.breakdown) {
+            Object.entries(bill.breakdown).forEach(([member, info]) => {
+                if (bill.settlement[member] === 'pending') {
+                    pendingRupees += Number(info.total || 0);
+                    pendingCount++;
+                }
+            });
+        }
+    });
+
+    if (dashTotalExpenses) dashTotalExpenses.textContent = formatINR(totalRupees);
+    if (dashPendingAmount) dashPendingAmount.textContent = formatINR(pendingRupees);
+
+    if (dashPendingBadge) {
+        if (count === 0) {
+            dashPendingBadge.textContent = 'All Settled';
+            dashPendingBadge.className = 'stat-badge stat-badge-neutral';
+        } else if (pendingRupees > 0) {
+            dashPendingBadge.textContent = `${pendingCount} Shares Pending`;
+            dashPendingBadge.className = 'stat-badge stat-badge-warning';
+        } else {
+            dashPendingBadge.textContent = 'All Settled ✓';
+            dashPendingBadge.className = 'stat-badge stat-badge-success';
+        }
+    }
+}
+
+function renderRecentBills() {
+    if (!recentBillsContainer) return;
+    const bills = getBillsHistory();
+
+    if (bills.length === 0) {
+        recentBillsContainer.innerHTML = `
+            <div class="empty-state-box">
+                <div class="empty-icon-circle">
+                    <i data-lucide="receipt"></i>
+                </div>
+                <h4 class="empty-title">No bills created yet</h4>
+                <p class="empty-desc">
+                    Get started by choosing one of the quick actions above to split your first restaurant bill with friends.
+                </p>
+                <button type="button" class="btn btn-emerald-primary btn-sm" id="emptyCreateFirstSplitBtn">
+                    <i data-lucide="plus"></i>
+                    <span>Create Your First Split</span>
+                </button>
+            </div>
+        `;
+
+        const firstSplitBtn = document.getElementById('emptyCreateFirstSplitBtn');
+        if (firstSplitBtn) {
+            firstSplitBtn.addEventListener('click', () => navigateTo('create-split'));
+        }
+        refreshIcons();
+        return;
+    }
+
+    // Show up to 4 recent bills
+    const recent = bills.slice(0, 4);
+    recentBillsContainer.innerHTML = recent.map(bill => {
+        const title = bill.title || 'Restaurant Dining Bill';
+        const dateStr = bill.displayDate || 'Recent';
+        const memberCount = bill.members?.length || 0;
+        const grandTotalStr = bill.summary?.grand_total_formatted || formatINR(bill.summary?.grand_total || 0);
+
+        // Check settlement
+        let allPaid = true;
+        if (bill.settlement && bill.members) {
+            allPaid = bill.members.every(m => bill.settlement[m] === 'paid');
+        }
+
+        const statusClass = allPaid ? 'bill-status-settled' : 'bill-status-pending';
+        const statusText = allPaid ? 'All Settled ✓' : 'Pending';
+
+        return `
+            <div class="bill-row-card" data-bill-id="${bill.id}">
+                <div class="bill-row-left">
+                    <div class="bill-row-icon">
+                        <i data-lucide="receipt-text"></i>
+                    </div>
+                    <div class="bill-row-info">
+                        <h4>${escapeHtml(title)}</h4>
+                        <div class="bill-row-meta">
+                            <span>${escapeHtml(dateStr)}</span>
+                            <span class="meta-dot">•</span>
+                            <span>${memberCount} ${memberCount === 1 ? 'member' : 'members'}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="bill-row-right">
+                    <div class="bill-row-amount">
+                        <div class="bill-total-price">${grandTotalStr}</div>
+                        <span class="bill-status-pill ${statusClass}">${statusText}</span>
+                    </div>
+                    <i data-lucide="chevron-right" class="arrow-icon"></i>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    // Attach click handlers to open bill in breakdown view
+    recentBillsContainer.querySelectorAll('.bill-row-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const billId = card.getAttribute('data-bill-id');
+            loadBillIntoView(billId);
+        });
+    });
+
+    refreshIcons();
+}
+
+function loadBillIntoView(billId) {
+    const bills = getBillsHistory();
+    const bill = bills.find(b => b.id === billId);
+    if (!bill) return;
+
+    currentBillSession = bill;
+    navigateTo('create-split');
+
+    // Populate Results Section directly
+    renderResults({
+        summary: bill.summary,
+        breakdown: bill.breakdown
+    }, bill);
+
+    showToast(`Loaded "${bill.title}" details`, 'info');
+}
+
+// ==========================================
+// 6. Navigation & View Routing
+// ==========================================
+
+function navigateTo(viewId) {
+    const views = {
+        'dashboard': viewDashboard,
+        'create-split': viewCreateSplit,
+        'history': viewHistory,
+        'settings': viewSettings
+    };
+
+    const navButtons = {
+        'dashboard': sidebarNavDashboard,
+        'create-split': sidebarNavCreate,
+        'history': sidebarNavHistory,
+        'settings': sidebarNavSettings
+    };
+
+    // Toggle view visibility
+    Object.entries(views).forEach(([id, el]) => {
+        if (!el) return;
+        if (id === viewId) {
+            el.classList.remove('hidden');
+            el.classList.add('active-view');
+        } else {
+            el.classList.add('hidden');
+            el.classList.remove('active-view');
+        }
+    });
+
+    // Update active nav button
+    Object.entries(navButtons).forEach(([id, btn]) => {
+        if (!btn) return;
+        if (id === viewId) btn.classList.add('active');
+        else btn.classList.remove('active');
+    });
+
+    // Close mobile drawer if open
+    closeMobileSidebar();
+
+    // Trigger View-specific renders
+    if (viewId === 'dashboard') {
+        updateDashboardStats();
+        renderRecentBills();
+    } else if (viewId === 'history') {
+        renderFullHistory(currentFilter);
+    } else if (viewId === 'settings') {
+        loadSettingsView();
+    }
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    refreshIcons();
+}
+
+function openMobileSidebar() {
+    if (appSidebar) appSidebar.classList.add('open');
+    if (sidebarBackdrop) sidebarBackdrop.classList.add('active');
+}
+
+function closeMobileSidebar() {
+    if (appSidebar) appSidebar.classList.remove('open');
+    if (sidebarBackdrop) sidebarBackdrop.classList.remove('active');
+}
+
+// Attach Nav Listeners
+if (sidebarNavDashboard) sidebarNavDashboard.addEventListener('click', () => navigateTo('dashboard'));
+if (sidebarNavCreate) sidebarNavCreate.addEventListener('click', () => navigateTo('create-split'));
+if (sidebarNavHistory) sidebarNavHistory.addEventListener('click', () => navigateTo('history'));
+if (sidebarNavSettings) sidebarNavSettings.addEventListener('click', () => navigateTo('settings'));
+
+if (dashboardCreateSplitBtn) dashboardCreateSplitBtn.addEventListener('click', () => navigateTo('create-split'));
+if (createSplitBackBtn) createSplitBackBtn.addEventListener('click', () => navigateTo('dashboard'));
+if (historyNewSplitBtn) historyNewSplitBtn.addEventListener('click', () => navigateTo('create-split'));
+if (viewAllBillsLink) viewAllBillsLink.addEventListener('click', () => navigateTo('history'));
+
+// Mobile menu toggle
+if (mobileMenuToggle) mobileMenuToggle.addEventListener('click', openMobileSidebar);
+if (sidebarBackdrop) sidebarBackdrop.addEventListener('click', closeMobileSidebar);
+
+// Quick Action Card Click Handlers
+if (quickActionManual) {
+    quickActionManual.addEventListener('click', () => {
+        navigateTo('create-split');
+        switchMode('manual');
+    });
+}
+
+if (quickActionAi) {
+    quickActionAi.addEventListener('click', () => {
+        navigateTo('create-split');
+        switchMode('ai');
+        switchToAiTextSubtab();
+    });
+}
+
+if (quickActionReceipt) {
+    quickActionReceipt.addEventListener('click', () => {
+        navigateTo('create-split');
+        switchMode('ai');
+        switchToAiReceiptSubtab();
+    });
+}
+
+// ==========================================
+// 7. Mode Switcher (Mode 1 Manual vs Mode 2 AI)
 // ==========================================
 
 function switchMode(mode) {
@@ -206,16 +593,38 @@ function switchMode(mode) {
         manualModeWorkflow.classList.add('hidden');
     }
     hideAlert();
+    refreshIcons();
 }
 
 navManualModeBtn.addEventListener('click', () => switchMode('manual'));
 navAiModeBtn.addEventListener('click', () => switchMode('ai'));
 
+function switchToAiTextSubtab() {
+    if (tabTextModeBtn && tabReceiptModeBtn) {
+        tabTextModeBtn.classList.add('active');
+        tabReceiptModeBtn.classList.remove('active');
+        aiTextEntryPanel.classList.remove('hidden');
+        aiReceiptEntryPanel.classList.add('hidden');
+    }
+}
+
+function switchToAiReceiptSubtab() {
+    if (tabTextModeBtn && tabReceiptModeBtn) {
+        tabReceiptModeBtn.classList.add('active');
+        tabTextModeBtn.classList.remove('active');
+        aiReceiptEntryPanel.classList.remove('hidden');
+        aiTextEntryPanel.classList.add('hidden');
+
+        if (!aiReceiptMembersInput.value.trim() && state.members.length > 0) {
+            aiReceiptMembersInput.value = state.members.join(', ');
+        }
+    }
+}
+
 // ==========================================
-// 5. MODE 1: MANUAL ENTRY WORKFLOW (100% PRESERVED)
+// 8. MODE 1: MANUAL ENTRY WORKFLOW (100% PRESERVED)
 // ==========================================
 
-// Add Member
 addMemberForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const name = memberNameInput.value.trim();
@@ -238,12 +647,12 @@ addMemberForm.addEventListener('submit', (e) => {
     renderMembers();
     renderShareCheckboxes();
     hideAlert();
+    showToast(`Added member ${name}`, 'info');
 });
 
 function removeMember(nameToRemove) {
     state.members = state.members.filter(m => m !== nameToRemove);
 
-    // Remove member from any items' sharedBy list
     state.items.forEach(item => {
         item.sharedBy = item.sharedBy.filter(m => m !== nameToRemove);
     });
@@ -254,102 +663,101 @@ function removeMember(nameToRemove) {
 }
 
 function renderMembers() {
+    membersList.innerHTML = '';
+
     if (state.members.length === 0) {
         emptyMembersText.classList.remove('hidden');
-        membersList.innerHTML = '';
         membersList.appendChild(emptyMembersText);
         return;
     }
 
     emptyMembersText.classList.add('hidden');
-    membersList.innerHTML = '';
 
-    state.members.forEach(name => {
+    state.members.forEach(member => {
         const chip = document.createElement('div');
-        chip.className = 'member-chip chip';
+        chip.className = 'member-chip';
         chip.innerHTML = `
-            <span>${escapeHtml(name)}</span>
-            <button type="button" class="chip-remove-btn chip-remove" aria-label="Remove ${escapeHtml(name)}">&times;</button>
+            <span>${escapeHtml(member)}</span>
+            <button type="button" class="remove-chip-btn" aria-label="Remove ${escapeHtml(member)}">&times;</button>
         `;
-        chip.querySelector('.chip-remove-btn').addEventListener('click', () => removeMember(name));
+
+        chip.querySelector('.remove-chip-btn').addEventListener('click', () => {
+            removeMember(member);
+        });
+
         membersList.appendChild(chip);
     });
 }
 
 function renderShareCheckboxes() {
+    itemShareCheckboxes.innerHTML = '';
+
     if (state.members.length === 0) {
         itemShareCheckboxes.innerHTML = '<span class="empty-state-text">Add group members above first.</span>';
         return;
     }
 
-    itemShareCheckboxes.innerHTML = '';
-    state.members.forEach(name => {
+    state.members.forEach(member => {
         const label = document.createElement('label');
-        label.className = 'check-label checkbox-label selected';
-        label.innerHTML = `
-            <input type="checkbox" name="itemParticipant" value="${escapeHtml(name)}" checked>
-            <span>${escapeHtml(name)}</span>
-        `;
-        const cb = label.querySelector('input[type="checkbox"]');
-        cb.addEventListener('change', () => {
-            if (cb.checked) {
+        label.className = 'participant-select-chip selected';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = member;
+        checkbox.checked = true;
+
+        checkbox.addEventListener('change', () => {
+            if (checkbox.checked) {
                 label.classList.add('selected');
             } else {
                 label.classList.remove('selected');
             }
         });
+
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(member));
         itemShareCheckboxes.appendChild(label);
     });
 }
 
 selectAllMembersBtn.addEventListener('click', () => {
-    const checkboxes = itemShareCheckboxes.querySelectorAll('input[type="checkbox"]');
-    checkboxes.forEach(cb => {
+    itemShareCheckboxes.querySelectorAll('label').forEach(label => {
+        const cb = label.querySelector('input');
         cb.checked = true;
-        const label = cb.closest('label');
-        if (label) label.classList.add('selected');
+        label.classList.add('selected');
     });
 });
 
 clearSelectedMembersBtn.addEventListener('click', () => {
-    const checkboxes = itemShareCheckboxes.querySelectorAll('input[type="checkbox"]');
-    checkboxes.forEach(cb => {
+    itemShareCheckboxes.querySelectorAll('label').forEach(label => {
+        const cb = label.querySelector('input');
         cb.checked = false;
-        const label = cb.closest('label');
-        if (label) label.classList.remove('selected');
+        label.classList.remove('selected');
     });
 });
 
-// Add Item
 addItemForm.addEventListener('submit', (e) => {
     e.preventDefault();
 
-    if (state.members.length === 0) {
-        showAlert('Please add at least one group member before adding items.');
-        memberNameInput.focus();
-        return;
-    }
-
     const name = itemNameInput.value.trim();
-    const priceVal = parseFloat(itemPriceInput.value);
+    const price = parseFloat(itemPriceInput.value);
 
     if (!name) {
         showAlert('Please enter an item description.');
-        itemNameInput.focus();
         return;
     }
 
-    if (isNaN(priceVal) || priceVal <= 0) {
-        showAlert('Please enter a valid price greater than ₹0.');
-        itemPriceInput.focus();
+    if (isNaN(price) || price <= 0) {
+        showAlert('Please enter a valid price greater than ₹0.00.');
         return;
     }
 
-    const selectedParticipants = [];
-    const checkboxes = itemShareCheckboxes.querySelectorAll('input[type="checkbox"]:checked');
-    checkboxes.forEach(cb => selectedParticipants.push(cb.value));
+    const selectedMembers = [];
+    itemShareCheckboxes.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
+        selectedMembers.push(cb.value);
+    });
 
-    if (selectedParticipants.length === 0) {
+    if (selectedMembers.length === 0) {
         showAlert('Please select at least one person who shared this item.');
         return;
     }
@@ -357,17 +765,18 @@ addItemForm.addEventListener('submit', (e) => {
     state.items.push({
         id: state.nextItemId++,
         name: name,
-        price: Number(priceVal.toFixed(2)),
-        sharedBy: selectedParticipants
+        price: price,
+        sharedBy: selectedMembers
     });
 
     itemNameInput.value = '';
     itemPriceInput.value = '';
-    selectAllMembersBtn.click();
     itemNameInput.focus();
 
+    selectAllMembersBtn.click();
     renderItems();
     hideAlert();
+    showToast(`Added "${name}" (${formatINR(price)})`, 'info');
 });
 
 function removeItem(itemId) {
@@ -376,66 +785,62 @@ function removeItem(itemId) {
 }
 
 function renderItems() {
+    itemsContainer.innerHTML = '';
     itemsCount.textContent = state.items.length;
 
     if (state.items.length === 0) {
         emptyItemsText.classList.remove('hidden');
-        itemsContainer.innerHTML = '';
         itemsContainer.appendChild(emptyItemsText);
         return;
     }
 
     emptyItemsText.classList.add('hidden');
-    itemsContainer.innerHTML = '';
 
     state.items.forEach(item => {
-        const itemRow = document.createElement('div');
-        itemRow.className = 'item-card';
+        const card = document.createElement('div');
+        card.className = 'item-card';
 
-        const participantChips = (item.sharedBy && item.sharedBy.length > 0)
-            ? item.sharedBy.map(p => 
-                `<span class="participant-chip" title="${escapeHtml(p)}">${escapeHtml(p)}</span>`
-            ).join(' ')
-            : '<span class="empty-state-text">No one assigned</span>';
+        const userTagsHtml = item.sharedBy.map(m => `
+            <span class="item-user-tag">${escapeHtml(m)}</span>
+        `).join('');
 
-        itemRow.innerHTML = `
+        card.innerHTML = `
             <div class="item-card-left">
-                <div class="item-card-header">
-                    <span class="item-name">${escapeHtml(item.name)}</span>
-                    <span class="item-price">${formatINR(item.price)}</span>
-                </div>
-                <div class="item-card-participants">
-                    <span class="participants-label">Shared by:</span>
-                    <div class="participant-chips-wrap">
-                        ${participantChips}
-                    </div>
+                <span class="item-card-name">${escapeHtml(item.name)}</span>
+                <div class="item-card-chips">
+                    ${userTagsHtml}
                 </div>
             </div>
             <div class="item-card-right">
-                <button type="button" class="item-delete-btn" aria-label="Delete ${escapeHtml(item.name)}" title="Delete item">
-                    &times;
+                <span class="item-card-price">${formatINR(item.price)}</span>
+                <button type="button" class="item-delete-btn" aria-label="Delete item">
+                    <i data-lucide="trash-2"></i>
                 </button>
             </div>
         `;
 
-        itemRow.querySelector('.item-delete-btn').addEventListener('click', () => removeItem(item.id));
-        itemsContainer.appendChild(itemRow);
+        card.querySelector('.item-delete-btn').addEventListener('click', () => {
+            removeItem(item.id);
+        });
+
+        itemsContainer.appendChild(card);
     });
+
+    refreshIcons();
 }
 
-// Mode 1: Quick Tip Chips
+// Quick Tip Chips
 tipChips.forEach(chip => {
     chip.addEventListener('click', () => {
-        tipInput.value = chip.getAttribute('data-tip');
+        tipChips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        tipInput.value = chip.dataset.tip;
     });
 });
 
-// Mode 1: Calculate Button
 calculateBtn.addEventListener('click', async () => {
-    if (isCalculating) return;
-
     if (state.members.length === 0) {
-        showAlert('Please add at least one member to calculate.');
+        showAlert('Please add at least one group member before calculating.');
         return;
     }
 
@@ -446,7 +851,7 @@ calculateBtn.addEventListener('click', async () => {
 
     for (const item of state.items) {
         if (!item.sharedBy || item.sharedBy.length === 0) {
-            showAlert(`"${item.name}" has no participants assigned. Please assign at least one person.`);
+            showAlert(`Dish "${item.name}" has no participants assigned.`);
             return;
         }
     }
@@ -470,14 +875,13 @@ calculateBtn.addEventListener('click', async () => {
         tip_percentage: tipValue
     };
 
-    await executeCalculation(payload, calculateBtn, 'Calculate Fair Split ⚡');
+    await executeCalculation(payload, calculateBtn, 'Calculate Fair Split ⚡', 'Manual Dining Split');
 });
 
-// Mode 1: Reset All
 resetBtn.addEventListener('click', () => {
     if (state.members.length === 0 && state.items.length === 0) return;
 
-    if (confirm('Are you sure you want to clear all members and items in Manual Mode?')) {
+    if (confirm('Clear all members and items in Manual Mode?')) {
         state.members = [];
         state.items = [];
         state.nextItemId = 1;
@@ -496,18 +900,18 @@ resetBtn.addEventListener('click', () => {
         resultsContent.classList.add('hidden');
         resultsPlaceholder.classList.remove('hidden');
         hideAlert();
+        showToast('Manual form cleared', 'info');
     }
 });
 
 // ==========================================
-// 6. MODE 2: AI-POWERED BILL ENTRY WORKFLOW
+// 9. MODE 2: AI-POWERED BILL ENTRY WORKFLOW
 // ==========================================
 
-// Sample prompt button click handlers
 if (samplePromptBtn1) {
     samplePromptBtn1.addEventListener('click', () => {
         aiDescriptionInput.value = "Rahul ate pizza which was 600 rupees, Priya and I shared 400 rupees pasta, and we all shared Coke worth 180 rupees.";
-        if (!aiSpeakerInput.value.trim()) aiSpeakerInput.value = "Sneha";
+        if (!aiSpeakerInput.value.trim()) aiSpeakerInput.value = getSavedSpeakerName() || "Sneha";
         aiDescriptionInput.focus();
     });
 }
@@ -515,7 +919,7 @@ if (samplePromptBtn1) {
 if (samplePromptBtn2) {
     samplePromptBtn2.addEventListener('click', () => {
         aiDescriptionInput.value = "Amit had biryani for 380, Pooja had dosa for 160, and we both shared kulfi for 140";
-        if (!aiSpeakerInput.value.trim()) aiSpeakerInput.value = "Sneha";
+        if (!aiSpeakerInput.value.trim()) aiSpeakerInput.value = getSavedSpeakerName() || "Sneha";
         aiDescriptionInput.focus();
     });
 }
@@ -523,31 +927,14 @@ if (samplePromptBtn2) {
 if (samplePromptBtn3) {
     samplePromptBtn3.addEventListener('click', () => {
         aiDescriptionInput.value = "Rahul had burger for 250, Priya had pasta for 350, and I had dessert";
-        if (!aiSpeakerInput.value.trim()) aiSpeakerInput.value = "Sneha";
+        if (!aiSpeakerInput.value.trim()) aiSpeakerInput.value = getSavedSpeakerName() || "Sneha";
         aiDescriptionInput.focus();
     });
 }
 
-// AI Sub-Tabs (Text Description vs Receipt Scan)
 if (tabTextModeBtn && tabReceiptModeBtn) {
-    tabTextModeBtn.addEventListener('click', () => {
-        tabTextModeBtn.classList.add('active');
-        tabReceiptModeBtn.classList.remove('active');
-        aiTextEntryPanel.classList.remove('hidden');
-        aiReceiptEntryPanel.classList.add('hidden');
-    });
-
-    tabReceiptModeBtn.addEventListener('click', () => {
-        tabReceiptModeBtn.classList.add('active');
-        tabTextModeBtn.classList.remove('active');
-        aiReceiptEntryPanel.classList.remove('hidden');
-        aiTextEntryPanel.classList.add('hidden');
-
-        // Pre-fill receipt members input if empty and manual members exist
-        if (!aiReceiptMembersInput.value.trim() && state.members.length > 0) {
-            aiReceiptMembersInput.value = state.members.join(', ');
-        }
-    });
+    tabTextModeBtn.addEventListener('click', switchToAiTextSubtab);
+    tabReceiptModeBtn.addEventListener('click', switchToAiReceiptSubtab);
 }
 
 function formatFileSize(bytes) {
@@ -561,13 +948,13 @@ function handleReceiptFile(file) {
 
     const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
     if (!validTypes.includes(file.type.toLowerCase())) {
-        showAlert('Unsupported file format. Please upload a JPG, JPEG, or PNG receipt photo.', 'error');
+        showAlert('Unsupported format. Please upload a JPG, JPEG, or PNG receipt photo.');
         return;
     }
 
-    const maxSize = 10 * 1024 * 1024; // 10 MB
+    const maxSize = 10 * 1024 * 1024;
     if (file.size > maxSize) {
-        showAlert('The receipt image exceeds 10 MB. Please upload a smaller photo.', 'error');
+        showAlert('The receipt image exceeds 10 MB. Please upload a smaller photo.');
         return;
     }
 
@@ -583,6 +970,7 @@ function handleReceiptFile(file) {
         receiptPreviewBox.classList.remove('hidden');
         scanReceiptBtn.disabled = false;
         hideAlert();
+        showToast('Receipt photo ready for scanning', 'info');
     };
     reader.readAsDataURL(file);
 }
@@ -596,9 +984,7 @@ if (browseReceiptBtn && receiptFileInput) {
 
 if (receiptDropzone && receiptFileInput) {
     receiptDropzone.addEventListener('click', () => {
-        if (!currentReceiptFile) {
-            receiptFileInput.click();
-        }
+        if (!currentReceiptFile) receiptFileInput.click();
     });
 
     receiptFileInput.addEventListener('change', (e) => {
@@ -609,17 +995,17 @@ if (receiptDropzone && receiptFileInput) {
 
     receiptDropzone.addEventListener('dragover', (e) => {
         e.preventDefault();
-        receiptDropzone.classList.add('dragover');
+        receiptDropzone.classList.add('drag-over');
     });
 
     receiptDropzone.addEventListener('dragleave', () => {
-        receiptDropzone.classList.remove('dragover');
+        receiptDropzone.classList.remove('drag-over');
     });
 
     receiptDropzone.addEventListener('drop', (e) => {
         e.preventDefault();
-        receiptDropzone.classList.remove('dragover');
-        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+        receiptDropzone.classList.remove('drag-over');
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
             handleReceiptFile(e.dataTransfer.files[0]);
         }
     });
@@ -628,6 +1014,7 @@ if (receiptDropzone && receiptFileInput) {
 if (replaceReceiptBtn && receiptFileInput) {
     replaceReceiptBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        receiptFileInput.value = '';
         receiptFileInput.click();
     });
 }
@@ -644,586 +1031,444 @@ if (removeReceiptBtn && receiptFileInput) {
     });
 }
 
-// 📸 Scan Receipt with Gemini
+// AI Timer Utility
+let timerInterval = null;
+let timerStartMs = 0;
+
+function startAiTimer(statusText) {
+    if (aiLoadingStatusText) aiLoadingStatusText.textContent = statusText;
+    if (aiTimerBadge) aiTimerBadge.textContent = '0.0s';
+    if (aiLoadingIndicator) aiLoadingIndicator.classList.remove('hidden');
+
+    timerStartMs = Date.now();
+    timerInterval = setInterval(() => {
+        const elapsedSec = ((Date.now() - timerStartMs) / 1000).toFixed(1);
+        if (aiTimerBadge) aiTimerBadge.textContent = `${elapsedSec}s`;
+    }, 100);
+}
+
+function stopAiTimer() {
+    if (timerInterval) clearInterval(timerInterval);
+    if (aiLoadingIndicator) aiLoadingIndicator.classList.add('hidden');
+}
+
+// Text Interpretation Button
+if (aiInterpretBtn) {
+    aiInterpretBtn.addEventListener('click', async () => {
+        const description = aiDescriptionInput.value.trim();
+        const speaker = aiSpeakerInput.value.trim() || getSavedSpeakerName();
+
+        if (!description) {
+            showAlert('Please enter a description of your meal.');
+            aiDescriptionInput.focus();
+            return;
+        }
+
+        isAiInterpreting = true;
+        aiInterpretBtn.disabled = true;
+        startAiTimer('Interpreting description with Gemini AI...');
+
+        try {
+            const response = await fetch('/api/ai/parse-bill', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    description: description,
+                    speaker_name: speaker
+                })
+            });
+
+            const data = await response.json();
+            stopAiTimer();
+
+            if (!response.ok || !data.success) {
+                showAlert(data.error || 'Failed to interpret bill description.');
+                return;
+            }
+
+            renderAiReview(data);
+            showToast('Bill interpreted! Review and confirm your split.', 'success');
+
+        } catch (err) {
+            stopAiTimer();
+            console.error('AI Interpretation error:', err);
+            showAlert('Network error: Could not reach the server.');
+        } finally {
+            isAiInterpreting = false;
+            aiInterpretBtn.disabled = false;
+        }
+    });
+}
+
+if (aiClearPromptBtn) {
+    aiClearPromptBtn.addEventListener('click', () => {
+        aiDescriptionInput.value = '';
+        aiDescriptionInput.focus();
+    });
+}
+
+// Receipt Scanning Button
 if (scanReceiptBtn) {
     scanReceiptBtn.addEventListener('click', async () => {
-        if (isScanningReceipt) return;
-
         if (!currentReceiptFile) {
-            showAlert('Please select or upload a receipt photo first.');
+            showAlert('Please upload or select a receipt photo first.');
             return;
         }
 
         isScanningReceipt = true;
         scanReceiptBtn.disabled = true;
-        aiLoadingStatusText.textContent = 'Scanning receipt with Gemini Vision AI...';
-        aiLoadingIndicator.classList.remove('hidden');
-        aiClarificationBox.classList.add('hidden');
-        hideAlert();
+        startAiTimer('Scanning receipt with Gemini Vision...');
 
-        const startTime = performance.now();
-        aiTimerBadge.textContent = '0.0s';
-        const timerInterval = setInterval(() => {
-            const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-            aiTimerBadge.textContent = `${elapsed}s`;
-        }, 100);
+        const formData = new FormData();
+        formData.append('receipt', currentReceiptFile);
+
+        const rawMembers = aiReceiptMembersInput.value.trim();
+        if (rawMembers) {
+            formData.append('members', rawMembers);
+        }
 
         try {
-            const formData = new FormData();
-            formData.append('receipt', currentReceiptFile);
-
-            const membersInputVal = aiReceiptMembersInput.value.trim();
-            if (membersInputVal) {
-                formData.append('members', membersInputVal);
-            } else if (state.members.length > 0) {
-                formData.append('members', JSON.stringify(state.members));
-            }
-
             const response = await fetch('/api/ai/scan-receipt', {
                 method: 'POST',
                 body: formData
             });
 
             const data = await response.json();
-            clearInterval(timerInterval);
-            const totalDuration = ((performance.now() - startTime) / 1000).toFixed(2);
-            aiTimerBadge.textContent = `${totalDuration}s`;
+            stopAiTimer();
 
             if (!response.ok || !data.success) {
-                if (data.is_missing_api_key) {
-                    showAlert('Gemini API key is not configured in .env. Please add GEMINI_API_KEY to your .env file.', 'error');
-                } else {
-                    showAlert(data.error || 'Failed to scan receipt with AI.', 'error');
-                }
+                showAlert(data.error || 'Failed to scan receipt image.');
                 return;
             }
 
-            // Successfully scanned! Populate aiState
-            aiState.members = Array.isArray(data.members) ? [...data.members] : [];
-            if (aiState.members.length === 0 && state.members.length > 0) {
-                aiState.members = [...state.members];
-            }
-
-            aiState.items = [];
-            aiState.nextItemId = 1;
-
-            if (Array.isArray(data.items)) {
-                data.items.forEach(it => {
-                    const qty = parseInt(it.quantity) || 1;
-                    const totPrice = parseFloat(it.price) || 0.0;
-                    const unitPrice = parseFloat(it.unit_price) || (qty > 0 ? totPrice / qty : 0.0);
-                    aiState.items.push({
-                        id: aiState.nextItemId++,
-                        name: String(it.name || 'Item').trim(),
-                        quantity: qty,
-                        unit_price: Number(unitPrice.toFixed(2)),
-                        price: Number(totPrice.toFixed(2)),
-                        has_missing_price: Boolean(it.has_missing_price || totPrice <= 0),
-                        shared_by: Array.isArray(it.shared_by) ? [...it.shared_by] : []
-                    });
-                });
-            }
-
-            // Restaurant Name
-            if (aiRestaurantBanner && aiRestaurantName) {
-                if (data.restaurant_name) {
-                    aiRestaurantName.textContent = data.restaurant_name;
-                    aiRestaurantBanner.classList.remove('hidden');
-                } else {
-                    aiRestaurantBanner.classList.add('hidden');
-                }
-            }
-
-            // Pre-fill Tax & Tip
-            if (data.tax_percentage !== undefined && data.tax_percentage !== null) {
-                aiTaxInput.value = data.tax_percentage;
-                aiState.tax = parseFloat(data.tax_percentage) || 0;
-            }
-            if (data.tip_percentage !== undefined && data.tip_percentage !== null) {
-                aiTipInput.value = data.tip_percentage;
-                aiState.tip = parseFloat(data.tip_percentage) || 0;
-            }
-
-            // Clarifications
-            const clarifs = data.clarifications || [];
-            if (aiState.members.length === 0) {
-                clarifs.push("Add group members under 'Extracted Group Members' to assign who shared each item.");
-            }
-            renderAiClarifications(clarifs);
-
-            // Render Interactive Review Box
-            renderAiReview();
-            aiReviewSection.classList.remove('hidden');
-            aiReviewSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-
-            showAlert(`⚡ Receipt scanned in ${totalDuration}s! Review the extracted items, quantities, and prices below, then assign participants.`, 'success');
+            renderAiReview(data);
+            showToast('Receipt scanned successfully! Assign participants below.', 'success');
 
         } catch (err) {
-            clearInterval(timerInterval);
-            console.error('Receipt scan error:', err);
-            showAlert('Network error: Could not reach the server. Make sure Python is running on port 5001.');
+            stopAiTimer();
+            console.error('Receipt Scan error:', err);
+            showAlert('Network error: Could not process receipt photo.');
         } finally {
             isScanningReceipt = false;
             scanReceiptBtn.disabled = false;
-            aiLoadingIndicator.classList.add('hidden');
         }
     });
 }
 
-// Clear Prompt
-aiClearPromptBtn.addEventListener('click', () => {
-    aiDescriptionInput.value = '';
-    aiDescriptionInput.focus();
-});
+// Render AI Review Section
+function renderAiReview(data) {
+    aiState.members = Array.isArray(data.members) ? [...data.members] : [];
+    aiState.restaurantName = data.restaurant_name || '';
 
-// AI Mode: Quick Tip Chips
-aiTipChips.forEach(chip => {
-    chip.addEventListener('click', () => {
-        aiTipInput.value = chip.getAttribute('data-tip');
-        aiState.tip = parseFloat(chip.getAttribute('data-tip')) || 0;
-    });
-});
-
-aiTaxInput.addEventListener('input', () => {
-    aiState.tax = parseFloat(aiTaxInput.value) || 0;
-});
-
-aiTipInput.addEventListener('input', () => {
-    aiState.tip = parseFloat(aiTipInput.value) || 0;
-});
-
-// ⚡ Interpret Bill with AI (Fast Gemini)
-aiInterpretBtn.addEventListener('click', async () => {
-    if (isAiInterpreting) return;
-
-    const description = aiDescriptionInput.value.trim();
-    const speakerName = aiSpeakerInput.value.trim();
-
-    if (!description) {
-        showAlert('Please enter a description of your meal in the box.');
-        aiDescriptionInput.focus();
-        return;
-    }
-
-    // Start timer & loading indicator
-    isAiInterpreting = true;
-    aiInterpretBtn.disabled = true;
-    aiLoadingIndicator.classList.remove('hidden');
-    aiClarificationBox.classList.add('hidden');
-    hideAlert();
-
-    const startTime = performance.now();
-    aiTimerBadge.textContent = '0.0s';
-    const timerInterval = setInterval(() => {
-        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-        aiTimerBadge.textContent = `${elapsed}s`;
-    }, 100);
-
-    try {
-        const response = await fetch('/api/ai/parse-bill', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                description: description,
-                speaker_name: speakerName
-            })
-        });
-
-        const data = await response.json();
-        clearInterval(timerInterval);
-        const totalDuration = ((performance.now() - startTime) / 1000).toFixed(2);
-        aiTimerBadge.textContent = `${totalDuration}s`;
-
-        if (!response.ok || !data.success) {
-            if (data.is_missing_api_key) {
-                showAlert('Gemini API key is not configured in .env. Please add GEMINI_API_KEY to your .env file.', 'error');
-            } else {
-                showAlert(data.error || 'Failed to interpret bill with AI.', 'error');
-            }
-            return;
-        }
-
-        // Successfully parsed! Populate aiState
-        aiState.members = Array.isArray(data.members) ? [...data.members] : [];
-        aiState.items = [];
-        aiState.nextItemId = 1;
-
-        if (Array.isArray(data.items)) {
-            data.items.forEach(it => {
-                aiState.items.push({
-                    id: aiState.nextItemId++,
-                    name: String(it.name || 'Dish').trim(),
-                    price: parseFloat(it.price) || 0.0,
-                    has_missing_price: Boolean(it.has_missing_price || (!it.price || it.price <= 0)),
-                    shared_by: Array.isArray(it.shared_by) ? [...it.shared_by] : []
-                });
-            });
-        }
-
-        // Display Clarifications / Missing Info if any
-        renderAiClarifications(data.clarifications || []);
-
-        // Render Interactive Review Box
-        renderAiReview();
-        aiReviewSection.classList.remove('hidden');
-        aiReviewSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-
-        showAlert(`⚡ Interpreted in ${totalDuration}s! Review the extracted items below and edit as needed.`, 'success');
-
-    } catch (err) {
-        clearInterval(timerInterval);
-        console.error('AI parse error:', err);
-        showAlert('Network error: Could not reach the server. Make sure Python is running on port 5001.');
-    } finally {
-        isAiInterpreting = false;
-        aiInterpretBtn.disabled = false;
-        aiLoadingIndicator.classList.add('hidden');
-    }
-});
-
-// Render Clarification Alerts
-function renderAiClarifications(clarifications) {
-    if (!clarifications || clarifications.length === 0) {
-        aiClarificationBox.classList.add('hidden');
-        aiClarificationList.innerHTML = '';
-        return;
-    }
-
-    aiClarificationList.innerHTML = '';
-    clarifications.forEach(msg => {
-        const li = document.createElement('li');
-        li.textContent = msg;
-        aiClarificationList.appendChild(li);
-    });
-    aiClarificationBox.classList.remove('hidden');
-}
-
-// Render AI Review Card
-function renderAiReview() {
-    // 1. Members
-    aiMembersCount.textContent = aiState.members.length;
-    aiMembersList.innerHTML = '';
-
-    if (aiState.members.length === 0) {
-        aiMembersList.innerHTML = '<span class="empty-state-text">No members identified. Add one below:</span>';
-    } else {
-        aiState.members.forEach(name => {
-            const chip = document.createElement('div');
-            chip.className = 'member-chip chip';
-            chip.innerHTML = `
-                <span>${escapeHtml(name)}</span>
-                <button type="button" class="chip-remove-btn chip-remove" aria-label="Remove ${escapeHtml(name)}">&times;</button>
-            `;
-            chip.querySelector('.chip-remove-btn').addEventListener('click', () => {
-                aiState.members = aiState.members.filter(m => m !== name);
-                aiState.items.forEach(it => {
-                    it.shared_by = it.shared_by.filter(m => m !== name);
-                });
-                renderAiReview();
-            });
-            aiMembersList.appendChild(chip);
-        });
-    }
-
-    // 2. Items List
-    aiItemsContainer.innerHTML = '';
-
-    if (aiState.items.length === 0) {
-        aiItemsContainer.innerHTML = '<p class="empty-state-text">No items found. Click "+ Add Item" above to add one.</p>';
-    } else {
-        aiState.items.forEach(item => {
-            const row = document.createElement('div');
-            row.className = 'ai-item-row';
-
-            // Participant toggle pills
-            let pillsHtml = '';
-            if (aiState.members.length === 0) {
-                pillsHtml = '<span class="empty-state-text">Add members first</span>';
-            } else {
-                pillsHtml = aiState.members.map(member => {
-                    const isShared = item.shared_by.some(m => m.toLowerCase() === member.toLowerCase());
-                    const activeClass = isShared ? 'active' : '';
-                    return `
-                        <button 
-                            type="button" 
-                            class="participant-toggle-pill ${activeClass}" 
-                            data-member="${escapeHtml(member)}"
-                            data-item-id="${item.id}"
-                        >
-                            ${isShared ? '✓ ' : '+ '}${escapeHtml(member)}
-                        </button>
-                    `;
-                }).join('');
-            }
-
-            const missingPriceClass = item.has_missing_price ? 'missing-price-input' : '';
-            const missingBadge = item.has_missing_price 
-                ? '<span class="missing-price-badge">⚠️ Price Missing</span>' 
-                : '';
-
-            row.innerHTML = `
-                <div class="ai-item-main-fields">
-                    <input 
-                        type="text" 
-                        class="ai-item-name-input" 
-                        value="${escapeHtml(item.name)}" 
-                        placeholder="Dish name"
-                    >
-                    <div class="ai-item-qty-wrap">
-                        <label class="qty-label">Qty</label>
-                        <input 
-                            type="number" 
-                            min="1" 
-                            step="1" 
-                            class="ai-item-qty-input" 
-                            value="${item.quantity || 1}"
-                        >
-                    </div>
-                    <div class="ai-item-price-wrap">
-                        <label class="price-label">₹ Total</label>
-                        <input 
-                            type="number" 
-                            step="0.01" 
-                            min="0.01" 
-                            class="ai-item-price-input ${missingPriceClass}" 
-                            value="${item.price > 0 ? item.price : ''}" 
-                            placeholder="₹ Price"
-                        >
-                    </div>
-                    ${missingBadge}
-                    <button type="button" class="ai-item-delete-btn" title="Delete item">&times;</button>
-                </div>
-                <div class="participant-toggle-pills-wrap">
-                    <span class="toggle-pill-label">Shared By:</span>
-                    ${pillsHtml}
-                </div>
-            `;
-
-            // Event Listeners for inline editing
-            const nameInput = row.querySelector('.ai-item-name-input');
-            nameInput.addEventListener('input', (e) => {
-                item.name = e.target.value.trim();
-            });
-
-            const qtyInput = row.querySelector('.ai-item-qty-input');
-            const priceInput = row.querySelector('.ai-item-price-input');
-
-            qtyInput.addEventListener('input', (e) => {
-                const newQty = parseInt(e.target.value) || 1;
-                if (newQty > 0) {
-                    item.quantity = newQty;
-                    if (item.unit_price && item.unit_price > 0) {
-                        item.price = Number((item.unit_price * newQty).toFixed(2));
-                        priceInput.value = item.price;
-                    }
-                    updateAiSubtotal();
-                }
-            });
-
-            priceInput.addEventListener('input', (e) => {
-                const val = parseFloat(e.target.value);
-                if (!isNaN(val) && val > 0) {
-                    item.price = Number(val.toFixed(2));
-                    item.unit_price = Number((item.price / (item.quantity || 1)).toFixed(2));
-                    item.has_missing_price = false;
-                    priceInput.classList.remove('missing-price-input');
-                    const badge = row.querySelector('.missing-price-badge');
-                    if (badge) badge.remove();
-                } else {
-                    item.price = 0.0;
-                    item.has_missing_price = true;
-                    priceInput.classList.add('missing-price-input');
-                }
-                updateAiSubtotal();
-            });
-
-            row.querySelector('.ai-item-delete-btn').addEventListener('click', () => {
-                aiState.items = aiState.items.filter(i => i.id !== item.id);
-                renderAiReview();
-            });
-
-            // Toggle participant pill click handler
-            row.querySelectorAll('.participant-toggle-pill').forEach(pill => {
-                pill.addEventListener('click', () => {
-                    const memberName = pill.getAttribute('data-member');
-                    const existsIndex = item.shared_by.findIndex(m => m.toLowerCase() === memberName.toLowerCase());
-                    
-                    if (existsIndex >= 0) {
-                        item.shared_by.splice(existsIndex, 1);
-                    } else {
-                        item.shared_by.push(memberName);
-                    }
-                    renderAiReview();
-                });
-            });
-
-            aiItemsContainer.appendChild(row);
-        });
-    }
-
-    updateAiSubtotal();
-}
-
-function updateAiSubtotal() {
-    const subtotalPaise = aiState.items.reduce((sum, it) => {
-        const p = parseFloat(it.price) || 0;
-        return sum + Math.round(p * 100);
-    }, 0);
-    aiItemsSubtotal.textContent = formatINR(subtotalPaise / 100);
-}
-
-// Add Missing Member Inline in AI Review
-aiAddMemberForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const name = aiAddMemberInput.value.trim();
-
-    if (!name) return;
-
-    const exists = aiState.members.some(m => m.toLowerCase() === name.toLowerCase());
-    if (exists) {
-        showAlert(`"${name}" is already in the extracted members list.`);
-        return;
-    }
-
-    aiState.members.push(name);
-    aiAddMemberInput.value = '';
-    renderAiReview();
-});
-
-// Add New Blank Item in AI Review
-aiAddNewItemBtn.addEventListener('click', () => {
-    aiState.items.push({
-        id: aiState.nextItemId++,
-        name: 'New Item',
-        quantity: 1,
-        unit_price: 0.0,
-        price: 0.0,
-        has_missing_price: true,
-        shared_by: [...aiState.members]
-    });
-    renderAiReview();
-});
-
-// Confirm & Calculate Split in AI Mode
-aiConfirmCalculateBtn.addEventListener('click', async () => {
-    if (isCalculating) return;
-
-    if (aiState.members.length === 0) {
-        showAlert('Please add at least one member in the review box.');
-        return;
-    }
-
-    if (aiState.items.length === 0) {
-        showAlert('Please add at least one bill item.');
-        return;
-    }
-
-    // Verify valid prices and participants
-    for (const item of aiState.items) {
-        if (!item.name || !item.name.trim()) {
-            showAlert('Please give every dish a valid name.');
-            return;
-        }
-
-        if (item.price <= 0 || item.has_missing_price) {
-            showAlert(`Price for "${item.name}" is missing or 0. Please enter its price in INR.`);
-            return;
-        }
-
-        if (!item.shared_by || item.shared_by.length === 0) {
-            showAlert(`Please select who shared "${item.name}" by clicking the member pills.`);
-            return;
-        }
-    }
-
-    const taxVal = parseFloat(aiTaxInput.value) || 0.0;
-    const tipVal = parseFloat(aiTipInput.value) || 0.0;
-
-    if (taxVal < 0 || tipVal < 0) {
-        showAlert('Tax and tip percentages cannot be negative.');
-        return;
-    }
-
-    const payload = {
-        members: aiState.members,
-        items: aiState.items.map(i => {
-            let displayName = i.name;
-            if (i.quantity && i.quantity > 1 && !displayName.includes(`(x${i.quantity})`)) {
-                displayName = `${displayName} (x${i.quantity})`;
-            }
-            return {
-                name: displayName,
-                price: i.price,
-                shared_by: i.shared_by
-            };
-        }),
-        tax_percentage: taxVal,
-        tip_percentage: tipVal
-    };
-
-    await executeCalculation(payload, aiConfirmCalculateBtn, '✓ Confirm & Calculate Split ⚡');
-});
-
-// Copy Extracted AI Data to Manual Mode
-aiCopyToManualBtn.addEventListener('click', () => {
-    if (aiState.members.length === 0 && aiState.items.length === 0) {
-        showAlert('Nothing to copy. Interpret a bill description first.');
-        return;
-    }
-
-    // Transfer members
-    state.members = [...aiState.members];
-
-    // Transfer items
-    state.items = aiState.items.map(i => {
-        let displayName = i.name;
-        if (i.quantity && i.quantity > 1 && !displayName.includes(`(x${i.quantity})`)) {
-            displayName = `${displayName} (x${i.quantity})`;
-        }
+    aiState.items = (data.items || []).map((it, idx) => {
+        const qty = parseInt(it.quantity) || 1;
+        const lineTotal = parseFloat(it.price) || 0;
+        const unitPrice = it.unit_price ? parseFloat(it.unit_price) : (qty > 0 ? lineTotal / qty : lineTotal);
         return {
-            id: state.nextItemId++,
-            name: displayName,
-            price: i.price,
-            sharedBy: [...i.shared_by]
+            id: idx + 1,
+            name: it.name || `Item #${idx + 1}`,
+            quantity: qty,
+            unitPrice: Math.round(unitPrice * 100) / 100,
+            price: Math.round(lineTotal * 100) / 100,
+            has_missing_price: Boolean(it.has_missing_price),
+            shared_by: Array.isArray(it.shared_by) ? [...it.shared_by] : []
         };
     });
 
-    // Transfer tax & tip
-    taxInput.value = aiTaxInput.value || '0';
-    tipInput.value = aiTipInput.value || '0';
+    aiState.nextItemId = aiState.items.length + 1;
+    aiState.tax = parseFloat(data.tax_percentage) || 0.0;
+    aiState.tip = parseFloat(data.tip_percentage) || 0.0;
 
-    // Render manual mode views
-    renderMembers();
-    renderShareCheckboxes();
-    renderItems();
+    // Restaurant Banner
+    if (aiRestaurantBanner) {
+        if (aiState.restaurantName) {
+            aiRestaurantName.textContent = aiState.restaurantName;
+            aiRestaurantBanner.classList.remove('hidden');
+        } else {
+            aiRestaurantBanner.classList.add('hidden');
+        }
+    }
 
-    // Switch view to Manual Mode
-    switchMode('manual');
-    showAlert('Successfully copied AI items to Manual Mode! You can manage them here.', 'success');
+    // Clarifications
+    if (aiClarificationBox && aiClarificationList) {
+        if (data.needs_clarification && Array.isArray(data.clarifications) && data.clarifications.length > 0) {
+            aiClarificationList.innerHTML = data.clarifications
+                .map(c => `<li>${escapeHtml(c)}</li>`)
+                .join('');
+            aiClarificationBox.classList.remove('hidden');
+        } else {
+            aiClarificationBox.classList.add('hidden');
+        }
+    }
+
+    if (aiTaxInput) aiTaxInput.value = aiState.tax > 0 ? aiState.tax : '0';
+    if (aiTipInput) aiTipInput.value = aiState.tip > 0 ? aiState.tip : '0';
+
+    renderAiMembers();
+    renderAiItems();
+    updateAiSubtotal();
+
+    aiReviewSection.classList.remove('hidden');
+    aiReviewSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderAiMembers() {
+    aiMembersList.innerHTML = '';
+    aiMembersCount.textContent = aiState.members.length;
+
+    aiState.members.forEach(member => {
+        const chip = document.createElement('div');
+        chip.className = 'member-chip';
+        chip.innerHTML = `
+            <span>${escapeHtml(member)}</span>
+            <button type="button" class="remove-chip-btn">&times;</button>
+        `;
+
+        chip.querySelector('.remove-chip-btn').addEventListener('click', () => {
+            aiState.members = aiState.members.filter(m => m !== member);
+            aiState.items.forEach(it => {
+                it.shared_by = it.shared_by.filter(m => m !== member);
+            });
+            renderAiMembers();
+            renderAiItems();
+        });
+
+        aiMembersList.appendChild(chip);
+    });
+}
+
+if (aiAddMemberForm) {
+    aiAddMemberForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const name = aiAddMemberInput.value.trim();
+        if (!name) return;
+
+        if (aiState.members.some(m => m.toLowerCase() === name.toLowerCase())) {
+            showAlert(`"${name}" is already in the list.`);
+            return;
+        }
+
+        aiState.members.push(name);
+        aiAddMemberInput.value = '';
+        renderAiMembers();
+        renderAiItems();
+    });
+}
+
+function renderAiItems() {
+    aiItemsContainer.innerHTML = '';
+
+    if (aiState.items.length === 0) {
+        aiItemsContainer.innerHTML = '<p class="empty-state-text">No items in this bill.</p>';
+        return;
+    }
+
+    aiState.items.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'ai-item-card';
+
+        const memberPillsHtml = aiState.members.map(member => {
+            const isAssigned = item.shared_by.includes(member);
+            const activeClass = isAssigned ? 'active' : '';
+            return `
+                <button type="button" class="ai-member-pill ${activeClass}" data-member="${escapeHtml(member)}">
+                    ${isAssigned ? '✓ ' : ''}${escapeHtml(member)}
+                </button>
+            `;
+        }).join('');
+
+        card.innerHTML = `
+            <div class="ai-item-row">
+                <input type="text" class="ai-item-name-input" value="${escapeHtml(item.name)}" placeholder="Dish name">
+                
+                <div class="ai-item-qty-wrap">
+                    <span class="qty-label">Qty</span>
+                    <input type="number" class="ai-item-qty-input" value="${item.quantity || 1}" min="1" step="1">
+                </div>
+
+                <div class="ai-item-price-wrap">
+                    <span class="price-label">₹</span>
+                    <input type="number" class="ai-item-price-input" value="${item.price || ''}" placeholder="0.00" step="0.01" min="0">
+                </div>
+
+                <button type="button" class="item-delete-btn" aria-label="Delete item">
+                    <i data-lucide="trash-2"></i>
+                </button>
+            </div>
+
+            <div class="ai-item-members-row">
+                ${memberPillsHtml || '<span class="empty-state-text">Add group members above to assign this item.</span>'}
+            </div>
+        `;
+
+        // Input listeners
+        const nameInput = card.querySelector('.ai-item-name-input');
+        const qtyInput = card.querySelector('.ai-item-qty-input');
+        const priceInput = card.querySelector('.ai-item-price-input');
+
+        nameInput.addEventListener('change', () => {
+            item.name = nameInput.value.trim();
+        });
+
+        qtyInput.addEventListener('input', () => {
+            const newQty = parseInt(qtyInput.value) || 1;
+            item.quantity = Math.max(1, newQty);
+            if (item.unitPrice > 0) {
+                item.price = Math.round(item.unitPrice * item.quantity * 100) / 100;
+                priceInput.value = item.price.toFixed(2);
+            }
+            updateAiSubtotal();
+        });
+
+        priceInput.addEventListener('input', () => {
+            const val = parseFloat(priceInput.value) || 0;
+            item.price = val;
+            if (item.quantity > 0) {
+                item.unitPrice = Math.round((val / item.quantity) * 100) / 100;
+            }
+            item.has_missing_price = val <= 0;
+            updateAiSubtotal();
+        });
+
+        // Delete button
+        card.querySelector('.item-delete-btn').addEventListener('click', () => {
+            aiState.items = aiState.items.filter(i => i.id !== item.id);
+            renderAiItems();
+            updateAiSubtotal();
+        });
+
+        // Member Pills click
+        card.querySelectorAll('.ai-member-pill').forEach(pill => {
+            pill.addEventListener('click', () => {
+                const mem = pill.dataset.member;
+                if (item.shared_by.includes(mem)) {
+                    item.shared_by = item.shared_by.filter(m => m !== mem);
+                } else {
+                    item.shared_by.push(mem);
+                }
+                renderAiItems();
+            });
+        });
+
+        aiItemsContainer.appendChild(card);
+    });
+
+    refreshIcons();
+}
+
+function updateAiSubtotal() {
+    const sub = aiState.items.reduce((acc, it) => acc + (parseFloat(it.price) || 0), 0);
+    aiItemsSubtotal.textContent = formatINR(sub);
+}
+
+if (aiAddNewItemBtn) {
+    aiAddNewItemBtn.addEventListener('click', () => {
+        aiState.items.push({
+            id: aiState.nextItemId++,
+            name: 'New Item',
+            quantity: 1,
+            unitPrice: 0.0,
+            price: 0.0,
+            has_missing_price: true,
+            shared_by: [...aiState.members]
+        });
+        renderAiItems();
+        updateAiSubtotal();
+    });
+}
+
+// AI Tip Chips
+aiTipChips.forEach(chip => {
+    chip.addEventListener('click', () => {
+        aiTipChips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        aiTipInput.value = chip.dataset.tip;
+    });
 });
 
-// Reset AI Form
-aiResetBtn.addEventListener('click', () => {
-    if (confirm('Clear the extracted bill review?')) {
+if (aiConfirmCalculateBtn) {
+    aiConfirmCalculateBtn.addEventListener('click', async () => {
+        if (aiState.members.length === 0) {
+            showAlert('Please add at least one member to your bill.');
+            return;
+        }
+
+        if (aiState.items.length === 0) {
+            showAlert('Please add at least one food or drink item.');
+            return;
+        }
+
+        for (const item of aiState.items) {
+            if (!item.price || item.price <= 0) {
+                showAlert(`Please enter a valid price for "${item.name}".`);
+                return;
+            }
+            if (!item.shared_by || item.shared_by.length === 0) {
+                showAlert(`Please assign at least one member to "${item.name}".`);
+                return;
+            }
+        }
+
+        const taxVal = parseFloat(aiTaxInput.value) || 0.0;
+        const tipVal = parseFloat(aiTipInput.value) || 0.0;
+
+        const payload = {
+            members: aiState.members,
+            items: aiState.items.map(it => ({
+                name: it.quantity > 1 ? `${it.name} (x${it.quantity})` : it.name,
+                price: it.price,
+                shared_by: it.shared_by
+            })),
+            tax_percentage: taxVal,
+            tip_percentage: tipVal
+        };
+
+        const sessionTitle = aiState.restaurantName || 'AI Extracted Bill Split';
+        await executeCalculation(payload, aiConfirmCalculateBtn, 'Confirm & Calculate Split ⚡', sessionTitle);
+    });
+}
+
+if (aiCopyToManualBtn) {
+    aiCopyToManualBtn.addEventListener('click', () => {
+        state.members = [...aiState.members];
+        state.items = aiState.items.map(it => ({
+            id: state.nextItemId++,
+            name: it.quantity > 1 ? `${it.name} (x${it.quantity})` : it.name,
+            price: it.price,
+            sharedBy: [...it.shared_by]
+        }));
+        taxInput.value = aiTaxInput.value;
+        tipInput.value = aiTipInput.value;
+
+        renderMembers();
+        renderShareCheckboxes();
+        renderItems();
+
+        switchMode('manual');
+        showToast('Extracted bill copied to Manual Mode', 'success');
+    });
+}
+
+if (aiResetBtn) {
+    aiResetBtn.addEventListener('click', () => {
         aiState.members = [];
         aiState.items = [];
-        if (aiRestaurantBanner) aiRestaurantBanner.classList.add('hidden');
+        aiState.restaurantName = '';
         aiReviewSection.classList.add('hidden');
-        aiClarificationBox.classList.add('hidden');
-        resultsContent.classList.add('hidden');
-        resultsPlaceholder.classList.remove('hidden');
-        hideAlert();
-    }
-});
+        if (aiClarificationBox) aiClarificationBox.classList.add('hidden');
+        if (aiRestaurantBanner) aiRestaurantBanner.classList.add('hidden');
+        showToast('AI bill review cleared', 'info');
+    });
+}
 
 // ==========================================
-// 7. Core Calculation Engine Integration
+// 10. Core Calculation Engine Integration
 // ==========================================
 
-async function executeCalculation(payload, buttonElement, originalButtonText) {
+async function executeCalculation(payload, buttonElement, originalButtonText, sessionTitle = 'Restaurant Split') {
     isCalculating = true;
     buttonElement.disabled = true;
-    buttonElement.textContent = 'Calculating Split...';
+    buttonElement.textContent = 'Calculating Exact Split...';
 
     try {
         const response = await fetch('/api/calculate', {
@@ -1239,12 +1484,33 @@ async function executeCalculation(payload, buttonElement, originalButtonText) {
             return;
         }
 
-        renderResults(data);
+        // Build Persistent Bill Record
+        const newBillRecord = {
+            id: 'bill_' + Date.now(),
+            title: sessionTitle,
+            date: new Date().toISOString(),
+            displayDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+            members: payload.members,
+            items: payload.items,
+            summary: data.summary,
+            breakdown: data.breakdown,
+            settlement: {} // memberName -> 'pending' | 'paid'
+        };
+
+        // Default all participants to pending
+        payload.members.forEach(m => {
+            newBillRecord.settlement[m] = 'pending';
+        });
+
+        currentBillSession = saveBillRecord(newBillRecord);
+
+        renderResults(data, currentBillSession);
         hideAlert();
+        showToast('Split calculated down to the paise! Saved to history.', 'success');
 
     } catch (err) {
         console.error('Calculation error:', err);
-        showAlert('Network error: Could not reach the server. Make sure Python is running.');
+        showAlert('Network error: Could not reach the calculation engine.');
     } finally {
         isCalculating = false;
         buttonElement.disabled = false;
@@ -1253,13 +1519,13 @@ async function executeCalculation(payload, buttonElement, originalButtonText) {
 }
 
 // ==========================================
-// 8. Render Settlement Breakdown (Right Column)
+// 11. Render Settlement Breakdown (Results)
 // ==========================================
 
-function renderResults(data) {
+function renderResults(data, billRecord = null) {
     const { summary, breakdown } = data;
+    const session = billRecord || currentBillSession;
 
-    // Display summary metrics
     summarySubtotal.textContent = summary.subtotal_formatted || formatINR(summary.subtotal);
     summaryTax.textContent = summary.tax_formatted || formatINR(summary.tax);
     summaryTaxLabel.textContent = `Tax (${summary.tax_percentage}%)`;
@@ -1267,7 +1533,6 @@ function renderResults(data) {
     summaryTipLabel.textContent = `Tip (${summary.tip_percentage}%)`;
     summaryGrandTotal.textContent = summary.grand_total_formatted || formatINR(summary.grand_total);
 
-    // Build breakdown cards per member
     breakdownCardsContainer.innerHTML = '';
 
     for (const [memberName, info] of Object.entries(breakdown)) {
@@ -1291,9 +1556,17 @@ function renderResults(data) {
             }).join('');
         }
 
+        const isPaid = session && session.settlement && session.settlement[memberName] === 'paid';
+        const toggleClass = isPaid ? 'is-paid' : 'is-pending';
+        const toggleText = isPaid ? 'Paid ✓' : 'Pending Settlement';
+        const toggleIcon = isPaid ? 'check' : 'clock';
+
         card.innerHTML = `
             <div class="member-card-header">
-                <span class="member-name">${escapeHtml(memberName)}</span>
+                <div class="member-name-wrap">
+                    <div class="member-avatar-chip">${escapeHtml(memberName.charAt(0).toUpperCase())}</div>
+                    <span class="member-name">${escapeHtml(memberName)}</span>
+                </div>
                 <span class="member-total">${info.total_formatted || formatINR(info.total)}</span>
             </div>
             <div class="member-card-details">
@@ -1306,20 +1579,308 @@ function renderResults(data) {
             <ul class="member-item-list">
                 ${itemsHtml}
             </ul>
+            <button type="button" class="settlement-toggle-btn ${toggleClass}" data-member="${escapeHtml(memberName)}">
+                <i data-lucide="${toggleIcon}"></i>
+                <span>${toggleText}</span>
+            </button>
         `;
+
+        // Toggle Paid / Pending
+        card.querySelector('.settlement-toggle-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (session) {
+                const currentStatus = session.settlement[memberName] || 'pending';
+                session.settlement[memberName] = currentStatus === 'paid' ? 'pending' : 'paid';
+                saveBillRecord(session);
+                renderResults(data, session);
+                updateDashboardStats();
+                showToast(`${memberName} marked as ${session.settlement[memberName].toUpperCase()}`, 'info');
+            }
+        });
 
         breakdownCardsContainer.appendChild(card);
     }
 
+    // Update Settlement Progress Bar
+    updateSettlementProgressBar(session, breakdown);
+
     resultsPlaceholder.classList.add('hidden');
     resultsContent.classList.remove('hidden');
+
+    refreshIcons();
 
     if (window.innerWidth <= 900) {
         resultsContent.scrollIntoView({ behavior: 'smooth' });
     }
 }
 
-// Initial UI Initialization
-renderMembers();
-renderShareCheckboxes();
-renderItems();
+function updateSettlementProgressBar(session, breakdown) {
+    if (!settlementProgressBar || !settlementProgressRatio) return;
+
+    const members = Object.keys(breakdown);
+    const totalMembers = members.length;
+    if (totalMembers === 0) return;
+
+    let settledCount = 0;
+    members.forEach(m => {
+        if (session && session.settlement && session.settlement[m] === 'paid') {
+            settledCount++;
+        }
+    });
+
+    const pct = Math.round((settledCount / totalMembers) * 100);
+    settlementProgressBar.style.width = `${pct}%`;
+    settlementProgressRatio.textContent = `${settledCount} of ${totalMembers} Settled (${pct}%)`;
+}
+
+// Copy Summary
+if (copySplitSummaryBtn) {
+    copySplitSummaryBtn.addEventListener('click', () => {
+        if (!currentBillSession) {
+            showAlert('No split available to copy.');
+            return;
+        }
+
+        const b = currentBillSession;
+        let text = `🧾 *FairSplit AI Summary: ${b.title}*\n`;
+        text += `Grand Total: ${b.summary.grand_total_formatted || formatINR(b.summary.grand_total)}\n\n`;
+        text += `*Individual Shares:*\n`;
+
+        Object.entries(b.breakdown).forEach(([name, info]) => {
+            const status = b.settlement[name] === 'paid' ? ' [PAID ✓]' : ' [PENDING]';
+            text += `• ${name}: ${info.total_formatted || formatINR(info.total)}${status}\n`;
+        });
+
+        text += `\n_Calculated with zero-rounding paise precision by FairSplit AI_`;
+
+        navigator.clipboard.writeText(text).then(() => {
+            showToast('Summary copied to clipboard!', 'success');
+        }).catch(() => {
+            showToast('Failed to copy. Please copy manually.', 'error');
+        });
+    });
+}
+
+if (saveSplitToHistoryBtn) {
+    saveSplitToHistoryBtn.addEventListener('click', () => {
+        showToast('Split is saved in My Bills / History!', 'info');
+    });
+}
+
+// ==========================================
+// 12. Full History View & Filtering
+// ==========================================
+
+function renderFullHistory(filter = 'all') {
+    if (!fullHistoryContainer) return;
+    currentFilter = filter;
+
+    const bills = getBillsHistory();
+    let filtered = bills;
+
+    if (filter === 'pending') {
+        filtered = bills.filter(b => b.settlement && Object.values(b.settlement).includes('pending'));
+    } else if (filter === 'settled') {
+        filtered = bills.filter(b => b.settlement && Object.values(b.settlement).length > 0 && Object.values(b.settlement).every(s => s === 'paid'));
+    }
+
+    if (historyFilteredCount) {
+        historyFilteredCount.textContent = `Showing ${filtered.length} ${filtered.length === 1 ? 'bill' : 'bills'}`;
+    }
+
+    if (filtered.length === 0) {
+        fullHistoryContainer.innerHTML = `
+            <div class="empty-state-box">
+                <div class="empty-icon-circle">
+                    <i data-lucide="receipt"></i>
+                </div>
+                <h4 class="empty-title">No bills found</h4>
+                <p class="empty-desc">There are no bills matching your current filter.</p>
+            </div>
+        `;
+        refreshIcons();
+        return;
+    }
+
+    fullHistoryContainer.innerHTML = filtered.map(bill => {
+        const title = bill.title || 'Restaurant Dining Bill';
+        const dateStr = bill.displayDate || 'Date unavailable';
+        const grandTotalStr = bill.summary?.grand_total_formatted || formatINR(bill.summary?.grand_total || 0);
+
+        const memberSharesHtml = Object.entries(bill.breakdown || {}).map(([member, info]) => {
+            const isPaid = bill.settlement && bill.settlement[member] === 'paid';
+            const statusClass = isPaid ? 'bill-status-settled' : 'bill-status-pending';
+            const statusLabel = isPaid ? 'Paid' : 'Pending';
+
+            return `
+                <div class="history-member-item">
+                    <span><strong>${escapeHtml(member)}</strong></span>
+                    <div style="display:flex; align-items:center; gap:0.5rem;">
+                        <span>${info.total_formatted || formatINR(info.total)}</span>
+                        <span class="bill-status-pill ${statusClass}">${statusLabel}</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <div class="history-bill-card" data-bill-id="${bill.id}">
+                <div class="history-card-header">
+                    <div class="bill-row-left">
+                        <div class="bill-row-icon">
+                            <i data-lucide="receipt-text"></i>
+                        </div>
+                        <div class="bill-row-info">
+                            <h4>${escapeHtml(title)}</h4>
+                            <div class="bill-row-meta">
+                                <span>${escapeHtml(dateStr)}</span>
+                                <span class="meta-dot">•</span>
+                                <span>${bill.members?.length || 0} participants</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bill-row-right">
+                        <div class="bill-row-amount">
+                            <div class="bill-total-price">${grandTotalStr}</div>
+                        </div>
+                        <i data-lucide="chevron-down" class="expand-icon"></i>
+                    </div>
+                </div>
+
+                <div class="history-card-body hidden">
+                    <p style="font-size:0.82rem; color:var(--muted-grey); margin-bottom:0.6rem;">Member Shares Breakdown:</p>
+                    <div class="history-details-grid">
+                        ${memberSharesHtml}
+                    </div>
+                    <div class="history-actions-row">
+                        <button type="button" class="btn btn-outline btn-sm delete-bill-btn" data-bill-id="${bill.id}">
+                            <i data-lucide="trash-2"></i> Delete
+                        </button>
+                        <button type="button" class="btn btn-emerald-primary btn-sm load-bill-btn" data-bill-id="${bill.id}">
+                            <i data-lucide="external-link"></i> View Full Breakdown
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    // Accordion toggle & buttons
+    fullHistoryContainer.querySelectorAll('.history-bill-card').forEach(card => {
+        const header = card.querySelector('.history-card-header');
+        const body = card.querySelector('.history-card-body');
+
+        header.addEventListener('click', () => {
+            body.classList.toggle('hidden');
+        });
+
+        const deleteBtn = card.querySelector('.delete-bill-btn');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (confirm('Are you sure you want to delete this bill from history?')) {
+                    deleteBillRecord(card.dataset.billId);
+                }
+            });
+        }
+
+        const loadBtn = card.querySelector('.load-bill-btn');
+        if (loadBtn) {
+            loadBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                loadBillIntoView(card.dataset.billId);
+            });
+        }
+    });
+
+    refreshIcons();
+}
+
+// History Filter Pills Click Handlers
+historyFilterPills.forEach(pill => {
+    pill.addEventListener('click', () => {
+        historyFilterPills.forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        renderFullHistory(pill.dataset.filter);
+    });
+});
+
+// ==========================================
+// 13. Settings & Personalization
+// ==========================================
+
+function getSavedSpeakerName() {
+    return localStorage.getItem(STORAGE_USER_KEY) || '';
+}
+
+function loadSettingsView() {
+    const saved = getSavedSpeakerName();
+    if (settingsSpeakerInput) settingsSpeakerInput.value = saved;
+    updateUserPill(saved);
+}
+
+function updateUserPill(name) {
+    const clean = name ? name.trim() : '';
+    if (sidebarUserName) {
+        sidebarUserName.textContent = clean ? clean : 'Welcome';
+    }
+    if (sidebarUserAvatar) {
+        sidebarUserAvatar.textContent = clean ? clean.charAt(0).toUpperCase() : 'S';
+    }
+    if (heroHeading) {
+        heroHeading.textContent = clean ? `Welcome back, ${clean}!` : 'Welcome back!';
+    }
+    if (aiSpeakerInput && !aiSpeakerInput.value.trim() && clean) {
+        aiSpeakerInput.value = clean;
+    }
+}
+
+if (saveSpeakerSettingBtn && settingsSpeakerInput) {
+    saveSpeakerSettingBtn.addEventListener('click', () => {
+        const name = settingsSpeakerInput.value.trim();
+        localStorage.setItem(STORAGE_USER_KEY, name);
+        updateUserPill(name);
+        showToast('Default speaker name saved!', 'success');
+    });
+}
+
+if (clearAllHistoryBtn) {
+    clearAllHistoryBtn.addEventListener('click', () => {
+        if (confirm('Clear all local bill history and settlement statistics?')) {
+            localStorage.removeItem(STORAGE_BILLS_KEY);
+            updateHistoryBadge();
+            updateDashboardStats();
+            renderRecentBills();
+            renderFullHistory();
+            showToast('Local bill history cleared', 'info');
+        }
+    });
+}
+
+// Dynamic Time Greeting (Morning / Afternoon / Evening)
+function setTimeGreeting() {
+    if (!heroGreetingTime) return;
+    const hour = new Date().getHours();
+    if (hour < 12) heroGreetingTime.textContent = 'Good morning';
+    else if (hour < 18) heroGreetingTime.textContent = 'Good afternoon';
+    else heroGreetingTime.textContent = 'Good evening';
+}
+
+// ==========================================
+// 14. Initial App Bootstrap
+// ==========================================
+
+document.addEventListener('DOMContentLoaded', () => {
+    setTimeGreeting();
+    const savedName = getSavedSpeakerName();
+    updateUserPill(savedName);
+    updateHistoryBadge();
+    updateDashboardStats();
+    renderRecentBills();
+
+    renderMembers();
+    renderShareCheckboxes();
+    renderItems();
+
+    refreshIcons();
+});
