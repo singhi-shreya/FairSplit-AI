@@ -49,6 +49,117 @@ let isScanningReceipt = false;
 let currentReceiptFile = null;
 
 // ==========================================
+// PayPal Sandbox Checkout Configuration
+// ==========================================
+let paypalConfig = {
+    is_enabled: false,
+    client_id: '',
+    currency: 'USD',
+    inr_to_usd_rate: 0.012,
+    mode: 'sandbox',
+    currency_disclosure: 'PayPal Checkout converts your INR share to USD at a fixed rate of 1 INR = $0.0120 USD. Server validates exact amounts.'
+};
+let paypalSdkLoaded = false;
+let paypalSdkLoadingPromise = null;
+
+async function initPayPalConfig() {
+    try {
+        const resp = await fetch('/api/paypal/config');
+        if (resp.ok) {
+            const data = await resp.json();
+            paypalConfig = data;
+            updatePayPalSettingsCard(data);
+            updatePayPalDisclosureBanner(data);
+            if (data.is_enabled && data.client_id) {
+                loadPayPalSDK(data.client_id, data.currency);
+            }
+        }
+    } catch (err) {
+        console.warn('Could not fetch PayPal config from server:', err);
+    }
+}
+
+function updatePayPalDisclosureBanner(config) {
+    const banner = document.getElementById('paypalDisclosureBanner');
+    const textEl = document.getElementById('paypalDisclosureText');
+    const titleEl = document.getElementById('paypalDisclosureTitle');
+    const badgeEl = document.getElementById('paypalModeBadge');
+    if (!banner) return;
+
+    if (config.is_enabled) {
+        if (textEl && config.currency_disclosure) {
+            textEl.textContent = config.currency_disclosure;
+        }
+        if (badgeEl) {
+            badgeEl.textContent = `${(config.mode || 'sandbox').toUpperCase()} READY`;
+        }
+        banner.classList.remove('hidden');
+    } else {
+        if (badgeEl) badgeEl.textContent = 'OFFLINE / CASH ONLY';
+        if (titleEl) titleEl.textContent = 'PayPal Integration Inactive';
+        if (textEl) textEl.textContent = 'Add your Sandbox credentials to .env to enable one-click PayPal payments for each member.';
+    }
+}
+
+function updatePayPalSettingsCard(config) {
+    const statusEl = document.getElementById('settingsPaypalStatus');
+    const modeEl = document.getElementById('settingsPaypalMode');
+    const rateEl = document.getElementById('settingsPaypalRate');
+
+    if (statusEl) {
+        if (config.is_enabled) {
+            statusEl.className = 'badge-tag-success';
+            statusEl.textContent = 'Active & Connected';
+        } else {
+            statusEl.className = 'badge-tag-neutral';
+            statusEl.textContent = 'Credentials Required';
+        }
+    }
+    if (modeEl) {
+        modeEl.textContent = (config.mode || 'sandbox').toUpperCase();
+    }
+    if (rateEl) {
+        rateEl.textContent = `1 INR = $${Number(config.inr_to_usd_rate || 0.012).toFixed(4)} USD`;
+    }
+}
+
+function loadPayPalSDK(clientId, currency = 'USD') {
+    if (window.paypal && typeof window.paypal.Buttons === 'function') {
+        paypalSdkLoaded = true;
+        return Promise.resolve(window.paypal);
+    }
+    if (paypalSdkLoadingPromise) {
+        return paypalSdkLoadingPromise;
+    }
+    paypalSdkLoadingPromise = new Promise((resolve, reject) => {
+        const existingScript = document.querySelector('script[src*="paypal.com/sdk/js"]');
+        if (existingScript) {
+            existingScript.addEventListener('load', () => {
+                paypalSdkLoaded = true;
+                resolve(window.paypal);
+            });
+            existingScript.addEventListener('error', (err) => reject(err));
+            return;
+        }
+
+        const script = document.createElement('script');
+        script.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(clientId)}&currency=${encodeURIComponent(currency)}&intent=capture&components=buttons`;
+        script.async = true;
+        script.onload = () => {
+            paypalSdkLoaded = true;
+            resolve(window.paypal);
+        };
+        script.onerror = (err) => {
+            console.warn('PayPal JS SDK script failed to load:', err);
+            reject(err);
+        };
+        document.head.appendChild(script);
+    });
+    return paypalSdkLoadingPromise;
+}
+
+
+// ==========================================
 // 2. DOM Elements Selection
 // ==========================================
 
@@ -336,10 +447,13 @@ function updateDashboardStats() {
         dashTotalBillsSubtitle.textContent = count === 1 ? '1 bill recorded' : `${count} bills recorded`;
     }
 
-    // Total Expenses
+    // Total Expenses, Collected (PayPal vs Offline), and Outstanding
     let totalRupees = 0;
     let pendingRupees = 0;
     let pendingCount = 0;
+    let collectedRupees = 0;
+    let paypalRupees = 0;
+    let offlineRupees = 0;
 
     bills.forEach(bill => {
         const gt = bill.summary?.grand_total || 0;
@@ -347,8 +461,19 @@ function updateDashboardStats() {
 
         if (bill.settlement && bill.breakdown) {
             Object.entries(bill.breakdown).forEach(([member, info]) => {
-                if (bill.settlement[member] === 'pending') {
-                    pendingRupees += Number(info.total || 0);
+                const share = Number(info.total || 0);
+                const status = bill.settlement[member] || 'pending';
+                if (status === 'paid') {
+                    collectedRupees += share;
+                    const method = (bill.payment_methods && bill.payment_methods[member]) || 
+                                   (bill.paypal_orders && bill.paypal_orders[member] ? 'paypal' : 'offline');
+                    if (method === 'paypal') {
+                        paypalRupees += share;
+                    } else {
+                        offlineRupees += share;
+                    }
+                } else {
+                    pendingRupees += share;
                     pendingCount++;
                 }
             });
@@ -356,6 +481,16 @@ function updateDashboardStats() {
     });
 
     if (dashTotalExpenses) dashTotalExpenses.textContent = formatINR(totalRupees);
+
+    // Total Collected Card
+    const dashTotalCollected = document.getElementById('dashTotalCollected');
+    const dashCollectedBreakdown = document.getElementById('dashCollectedBreakdown');
+    if (dashTotalCollected) dashTotalCollected.textContent = formatINR(collectedRupees);
+    if (dashCollectedBreakdown) {
+        dashCollectedBreakdown.textContent = `PayPal: ${formatINR(paypalRupees)} • Offline: ${formatINR(offlineRupees)}`;
+    }
+
+    // Total Outstanding Card
     if (dashPendingAmount) dashPendingAmount.textContent = formatINR(pendingRupees);
 
     if (dashPendingBadge) {
@@ -465,6 +600,7 @@ function loadBillIntoView(billId) {
 
     // Populate Results Section directly
     renderResults({
+        bill_id: bill.bill_id || bill.id,
         summary: bill.summary,
         breakdown: bill.breakdown
     }, bill);
@@ -1470,15 +1606,26 @@ async function executeCalculation(payload, buttonElement, originalButtonText, se
     buttonElement.disabled = true;
     buttonElement.textContent = 'Calculating Exact Split...';
 
+    let response;
+    let data;
+
     try {
-        const response = await fetch('/api/calculate', {
+        response = await fetch('/api/calculate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
+        data = await response.json();
+    } catch (networkErr) {
+        console.error('Calculation network error:', networkErr);
+        showAlert('Network error: Could not reach the calculation engine. Please make sure the Flask server is running on http://127.0.0.1:5001.');
+        isCalculating = false;
+        buttonElement.disabled = false;
+        buttonElement.textContent = originalButtonText;
+        return;
+    }
 
-        const data = await response.json();
-
+    try {
         if (!response.ok || !data.success) {
             showAlert(data.error || 'Failed to calculate bill split.');
             return;
@@ -1486,8 +1633,9 @@ async function executeCalculation(payload, buttonElement, originalButtonText, se
 
         // Build Persistent Bill Record
         const newBillRecord = {
-            id: 'bill_' + Date.now(),
-            title: sessionTitle,
+            id: data.bill_id || ('bill_' + Date.now()),
+            bill_id: data.bill_id,
+            title: data.title || sessionTitle,
             date: new Date().toISOString(),
             displayDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
             members: payload.members,
@@ -1497,9 +1645,20 @@ async function executeCalculation(payload, buttonElement, originalButtonText, se
             settlement: {} // memberName -> 'pending' | 'paid'
         };
 
-        // Default all participants to pending
+        // Populate settlement status from server or default to pending
         payload.members.forEach(m => {
-            newBillRecord.settlement[m] = 'pending';
+            if (data.settlement && data.settlement.members) {
+                if (Array.isArray(data.settlement.members)) {
+                    const match = data.settlement.members.find(x => (x.member_name || '').toLowerCase() === m.toLowerCase());
+                    newBillRecord.settlement[m] = match ? match.status : 'pending';
+                } else if (data.settlement.members[m]) {
+                    newBillRecord.settlement[m] = data.settlement.members[m].status;
+                } else {
+                    newBillRecord.settlement[m] = 'pending';
+                }
+            } else {
+                newBillRecord.settlement[m] = 'pending';
+            }
         });
 
         currentBillSession = saveBillRecord(newBillRecord);
@@ -1508,9 +1667,9 @@ async function executeCalculation(payload, buttonElement, originalButtonText, se
         hideAlert();
         showToast('Split calculated down to the paise! Saved to history.', 'success');
 
-    } catch (err) {
-        console.error('Calculation error:', err);
-        showAlert('Network error: Could not reach the calculation engine.');
+    } catch (renderErr) {
+        console.error('Calculation rendering error:', renderErr);
+        showAlert('Error displaying results: ' + renderErr.message);
     } finally {
         isCalculating = false;
         buttonElement.disabled = false;
@@ -1525,6 +1684,7 @@ async function executeCalculation(payload, buttonElement, originalButtonText, se
 function renderResults(data, billRecord = null) {
     const { summary, breakdown } = data;
     const session = billRecord || currentBillSession;
+    const billId = data.bill_id || session?.bill_id || session?.id || '';
 
     summarySubtotal.textContent = summary.subtotal_formatted || formatINR(summary.subtotal);
     summaryTax.textContent = summary.tax_formatted || formatINR(summary.tax);
@@ -1533,7 +1693,11 @@ function renderResults(data, billRecord = null) {
     summaryTipLabel.textContent = `Tip (${summary.tip_percentage}%)`;
     summaryGrandTotal.textContent = summary.grand_total_formatted || formatINR(summary.grand_total);
 
+    updatePayPalDisclosureBanner(paypalConfig);
+
     breakdownCardsContainer.innerHTML = '';
+
+    const pendingPaypalButtonsToMount = [];
 
     for (const [memberName, info] of Object.entries(breakdown)) {
         const card = document.createElement('div');
@@ -1557,9 +1721,89 @@ function renderResults(data, billRecord = null) {
         }
 
         const isPaid = session && session.settlement && session.settlement[memberName] === 'paid';
-        const toggleClass = isPaid ? 'is-paid' : 'is-pending';
-        const toggleText = isPaid ? 'Paid ✓' : 'Pending Settlement';
-        const toggleIcon = isPaid ? 'check' : 'clock';
+        const paymentMethod = isPaid ? ((session.payment_methods && session.payment_methods[memberName]) || 
+                                       (session.paypal_orders && session.paypal_orders[memberName] ? 'paypal' : 'offline')) : null;
+        const sanitizedMemberId = memberName.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const shareAmountInr = Number(info.total || 0);
+        const rate = Number(paypalConfig.inr_to_usd_rate || 0.012);
+        const shareAmountUsd = (shareAmountInr * rate).toFixed(2);
+
+        let paymentSectionHtml = '';
+        if (isPaid) {
+            if (paymentMethod === 'paypal') {
+                paymentSectionHtml = `
+                    <div class="payment-settled-box paypal-settled">
+                        <div class="settled-badge">
+                            <i data-lucide="check-circle-2"></i>
+                            <span>Paid via PayPal Sandbox ✓</span>
+                        </div>
+                        <div class="settled-meta">
+                            <span>Captured: <strong>${info.total_formatted || formatINR(info.total)}</strong> (≈ $${shareAmountUsd} USD)</span>
+                        </div>
+                    </div>
+                `;
+            } else {
+                paymentSectionHtml = `
+                    <div class="payment-settled-box offline-settled">
+                        <div class="settled-badge">
+                            <i data-lucide="check-circle-2"></i>
+                            <span>Paid via Cash / Offline ✓</span>
+                        </div>
+                        <div class="settled-meta">
+                            <span>Recorded: <strong>${info.total_formatted || formatINR(info.total)}</strong> (Cash / UPI / Transfer)</span>
+                        </div>
+                        <button type="button" class="btn-revert-offline" data-member="${escapeHtml(memberName)}">
+                            <i data-lucide="rotate-ccw"></i>
+                            <span>Accidental? Revert to Pending</span>
+                        </button>
+                    </div>
+                `;
+            }
+        } else {
+            // Member is Pending: Offer TWO distinct payment options
+            paymentSectionHtml = `
+                <div class="member-payment-options">
+                    <!-- Option 1: Pay with PayPal -->
+                    <div class="payment-method-box paypal-method-box">
+                        <div class="payment-method-header">
+                            <span class="method-tag"><i data-lucide="credit-card"></i> Option 1: PayPal Checkout</span>
+                            <span class="method-amount-usd">≈ $${shareAmountUsd} USD</span>
+                        </div>
+                        <div id="paypal-btn-${sanitizedMemberId}" class="paypal-btn-slot"></div>
+                        <div class="paypal-slot-fallback ${paypalConfig.is_enabled ? 'hidden' : ''}" id="fallback-${sanitizedMemberId}">
+                            <span class="paypal-inactive-note">PayPal checkout requires active credentials</span>
+                        </div>
+                    </div>
+
+                    <div class="payment-options-divider">
+                        <span>OR</span>
+                    </div>
+
+                    <!-- Option 2: Mark as Paid (Cash / Offline) -->
+                    <div class="payment-method-box offline-method-box">
+                        <div class="payment-method-header">
+                            <span class="method-tag"><i data-lucide="banknote"></i> Option 2: Cash / Offline</span>
+                            <span class="method-amount-inr">${info.total_formatted || formatINR(info.total)}</span>
+                        </div>
+                        <button type="button" class="btn-offline-settle" data-member="${escapeHtml(memberName)}">
+                            <i data-lucide="check"></i>
+                            <span>Mark as Paid (Cash / UPI)</span>
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            if (paypalConfig.is_enabled) {
+                pendingPaypalButtonsToMount.push({
+                    slotId: `paypal-btn-${sanitizedMemberId}`,
+                    fallbackId: `fallback-${sanitizedMemberId}`,
+                    memberName,
+                    billId,
+                    amountInr: shareAmountInr,
+                    amountUsd: shareAmountUsd
+                });
+            }
+        }
 
         card.innerHTML = `
             <div class="member-card-header">
@@ -1579,29 +1823,106 @@ function renderResults(data, billRecord = null) {
             <ul class="member-item-list">
                 ${itemsHtml}
             </ul>
-            <button type="button" class="settlement-toggle-btn ${toggleClass}" data-member="${escapeHtml(memberName)}">
-                <i data-lucide="${toggleIcon}"></i>
-                <span>${toggleText}</span>
-            </button>
+            ${paymentSectionHtml}
         `;
 
-        // Toggle Paid / Pending
-        card.querySelector('.settlement-toggle-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (session) {
-                const currentStatus = session.settlement[memberName] || 'pending';
-                session.settlement[memberName] = currentStatus === 'paid' ? 'pending' : 'paid';
-                saveBillRecord(session);
+        // Wire Option 2: Mark as Paid (Cash / Offline) with Confirmation
+        const offlineSettleBtn = card.querySelector('.btn-offline-settle');
+        if (offlineSettleBtn) {
+            offlineSettleBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const formattedAmount = info.total_formatted || formatINR(info.total);
+                const confirmed = window.confirm(
+                    `Mark ${memberName} as Paid?\n\nAmount: ${formattedAmount}\nPayment Method: Cash / Offline / UPI\n\nThis will record an offline settlement without initiating a PayPal transaction.`
+                );
+                if (!confirmed) return;
+
+                offlineSettleBtn.disabled = true;
+                offlineSettleBtn.innerHTML = '<span>Recording offline payment...</span>';
+
+                try {
+                    if (billId) {
+                        const response = await fetch(`/api/bills/${encodeURIComponent(billId)}/settle-offline`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ member_name: memberName })
+                        });
+                        const resData = await response.json();
+                        if (!response.ok || !resData.success) {
+                            console.warn('Server offline settle warning:', resData.error);
+                        }
+                    }
+                } catch (err) {
+                    console.warn('Network offline settle fallback to local storage:', err);
+                }
+
+                if (session) {
+                    session.settlement = session.settlement || {};
+                    session.settlement[memberName] = 'paid';
+                    session.payment_methods = session.payment_methods || {};
+                    session.payment_methods[memberName] = 'offline';
+                    saveBillRecord(session);
+                }
+
                 renderResults(data, session);
                 updateDashboardStats();
-                showToast(`${memberName} marked as ${session.settlement[memberName].toUpperCase()}`, 'info');
-            }
-        });
+                renderRecentBills();
+                renderFullHistory(currentFilter);
+                showToast(`✓ ${memberName} marked as paid via Cash/Offline (${formattedAmount})`, 'success');
+            });
+        }
+
+        // Wire Accidental Revert for Offline Payments
+        const revertBtn = card.querySelector('.btn-revert-offline');
+        if (revertBtn) {
+            revertBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const confirmed = window.confirm(
+                    `Revert ${memberName}'s offline payment record back to Pending?\n\nThis will restore both PayPal and Offline payment options for ${memberName}.`
+                );
+                if (!confirmed) return;
+
+                revertBtn.disabled = true;
+                revertBtn.textContent = 'Reverting...';
+
+                try {
+                    if (billId) {
+                        const response = await fetch(`/api/bills/${encodeURIComponent(billId)}/revert-offline`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ member_name: memberName })
+                        });
+                        const resData = await response.json();
+                        if (!response.ok || !resData.success) {
+                            showAlert(resData.error || 'Failed to revert offline payment on server.');
+                            return;
+                        }
+                    }
+                } catch (err) {
+                    console.warn('Network offline revert fallback:', err);
+                }
+
+                if (session) {
+                    session.settlement = session.settlement || {};
+                    session.settlement[memberName] = 'pending';
+                    if (session.payment_methods) {
+                        delete session.payment_methods[memberName];
+                    }
+                    saveBillRecord(session);
+                }
+
+                renderResults(data, session);
+                updateDashboardStats();
+                renderRecentBills();
+                renderFullHistory(currentFilter);
+                showToast(`${memberName} reverted to Pending`, 'info');
+            });
+        }
 
         breakdownCardsContainer.appendChild(card);
     }
 
-    // Update Settlement Progress Bar
+    // Update Settlement Progress Bar and Financial Metrics
     updateSettlementProgressBar(session, breakdown);
 
     resultsPlaceholder.classList.add('hidden');
@@ -1609,8 +1930,128 @@ function renderResults(data, billRecord = null) {
 
     refreshIcons();
 
+    // Mount individual PayPal buttons for each pending member
+    pendingPaypalButtonsToMount.forEach(btnInfo => {
+        mountMemberPayPalButton(btnInfo, session, data);
+    });
+
     if (window.innerWidth <= 900) {
         resultsContent.scrollIntoView({ behavior: 'smooth' });
+    }
+}
+
+async function mountMemberPayPalButton(btnInfo, session, billData) {
+    const { slotId, fallbackId, memberName, billId, amountUsd } = btnInfo;
+    const slot = document.getElementById(slotId);
+    const fallback = document.getElementById(fallbackId);
+    if (!slot) return;
+
+    if (!paypalConfig.is_enabled || !paypalConfig.client_id) {
+        if (fallback) fallback.classList.remove('hidden');
+        return;
+    }
+
+    try {
+        await loadPayPalSDK(paypalConfig.client_id, paypalConfig.currency);
+    } catch (err) {
+        console.warn('PayPal SDK not ready, revealing manual fallback:', err);
+        if (fallback) fallback.classList.remove('hidden');
+        return;
+    }
+
+    if (!window.paypal || typeof window.paypal.Buttons !== 'function') {
+        if (fallback) fallback.classList.remove('hidden');
+        return;
+    }
+
+    slot.innerHTML = '';
+
+    try {
+        window.paypal.Buttons({
+            style: {
+                layout: 'horizontal',
+                color: 'gold',
+                shape: 'rect',
+                label: 'paypal',
+                height: 38,
+                tagline: false
+            },
+            createOrder: async () => {
+                try {
+                    const response = await fetch('/api/paypal/create-order', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            bill_id: billId,
+                            member_name: memberName
+                        })
+                    });
+
+                    const resData = await response.json();
+                    if (!response.ok || !resData.success) {
+                        const errMsg = resData.error || 'Failed to initialize PayPal order.';
+                        showAlert(errMsg);
+                        throw new Error(errMsg);
+                    }
+                    return resData.orderID;
+                } catch (e) {
+                    console.error('Order creation error:', e);
+                    showAlert(e.message || 'Error creating PayPal checkout.');
+                    throw e;
+                }
+            },
+            onApprove: async (orderData) => {
+                showToast(`Verifying capture with PayPal for ${memberName}...`, 'info');
+                try {
+                    const response = await fetch('/api/paypal/capture-order', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            order_id: orderData.orderID,
+                            bill_id: billId,
+                            member_name: memberName
+                        })
+                    });
+
+                    const captureData = await response.json();
+                    if (!response.ok || !captureData.success) {
+                        const errMsg = captureData.error || 'Payment capture could not be verified.';
+                        showAlert(errMsg);
+                        return;
+                    }
+
+                    showToast(`✓ Payment received for ${memberName} via PayPal!`, 'success');
+
+                    // Update session for this individual member ONLY
+                    if (session) {
+                        session.settlement = session.settlement || {};
+                        session.settlement[memberName] = 'paid';
+                        session.payment_methods = session.payment_methods || {};
+                        session.payment_methods[memberName] = 'paypal';
+                        saveBillRecord(session);
+                    }
+
+                    renderResults(billData, session);
+                    updateDashboardStats();
+                    renderRecentBills();
+                    renderFullHistory(currentFilter);
+
+                } catch (err) {
+                    console.error('Payment capture error:', err);
+                    showAlert('Failed to finalize PayPal capture. Please check network.');
+                }
+            },
+            onCancel: () => {
+                showToast(`PayPal checkout cancelled for ${memberName}`, 'info');
+            },
+            onError: (err) => {
+                console.error('PayPal button runtime error:', err);
+                showToast(`PayPal checkout error for ${memberName}`, 'error');
+            }
+        }).render('#' + slotId);
+    } catch (err) {
+        console.warn(`Could not render PayPal button for ${memberName}:`, err);
+        if (fallback) fallback.classList.remove('hidden');
     }
 }
 
@@ -1622,15 +2063,42 @@ function updateSettlementProgressBar(session, breakdown) {
     if (totalMembers === 0) return;
 
     let settledCount = 0;
+    let collectedAmount = 0;
+    let paypalCollected = 0;
+    let offlineCollected = 0;
+    let totalAmount = 0;
+
     members.forEach(m => {
+        const share = Number(breakdown[m]?.total || 0);
+        totalAmount += share;
         if (session && session.settlement && session.settlement[m] === 'paid') {
             settledCount++;
+            collectedAmount += share;
+            const method = (session.payment_methods && session.payment_methods[m]) || 
+                           (session.paypal_orders && session.paypal_orders[m] ? 'paypal' : 'offline');
+            if (method === 'paypal') {
+                paypalCollected += share;
+            } else {
+                offlineCollected += share;
+            }
         }
     });
 
+    const outstandingAmount = Math.max(0, totalAmount - collectedAmount);
     const pct = Math.round((settledCount / totalMembers) * 100);
+
     settlementProgressBar.style.width = `${pct}%`;
     settlementProgressRatio.textContent = `${settledCount} of ${totalMembers} Settled (${pct}%)`;
+
+    const collectedEl = document.getElementById('settlementCollectedAmount');
+    const outstandingEl = document.getElementById('settlementOutstandingAmount');
+    const paypalEl = document.getElementById('settlementPaypalCollected');
+    const offlineEl = document.getElementById('settlementOfflineCollected');
+
+    if (collectedEl) collectedEl.textContent = formatINR(collectedAmount);
+    if (outstandingEl) outstandingEl.textContent = formatINR(outstandingAmount);
+    if (paypalEl) paypalEl.textContent = formatINR(paypalCollected);
+    if (offlineEl) offlineEl.textContent = formatINR(offlineCollected);
 }
 
 // Copy Summary
@@ -1709,8 +2177,10 @@ function renderFullHistory(filter = 'all') {
 
         const memberSharesHtml = Object.entries(bill.breakdown || {}).map(([member, info]) => {
             const isPaid = bill.settlement && bill.settlement[member] === 'paid';
+            const method = isPaid ? ((bill.payment_methods && bill.payment_methods[member]) || 
+                                     (bill.paypal_orders && bill.paypal_orders[member] ? 'paypal' : 'offline')) : null;
             const statusClass = isPaid ? 'bill-status-settled' : 'bill-status-pending';
-            const statusLabel = isPaid ? 'Paid' : 'Pending';
+            const statusLabel = isPaid ? (method === 'paypal' ? 'Paid (PayPal) ✓' : 'Paid (Offline) ✓') : 'Pending';
 
             return `
                 <div class="history-member-item">
@@ -1817,6 +2287,7 @@ function loadSettingsView() {
     const saved = getSavedSpeakerName();
     if (settingsSpeakerInput) settingsSpeakerInput.value = saved;
     updateUserPill(saved);
+    updatePayPalSettingsCard(paypalConfig);
 }
 
 function updateUserPill(name) {
@@ -1881,6 +2352,9 @@ document.addEventListener('DOMContentLoaded', () => {
     renderMembers();
     renderShareCheckboxes();
     renderItems();
+
+    // Initialize PayPal Sandbox Gateway configuration & SDK
+    initPayPalConfig();
 
     refreshIcons();
 });

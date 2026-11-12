@@ -1,10 +1,20 @@
 import os
 import json
 import base64
+import time
+import uuid
 from decimal import Decimal, ROUND_HALF_UP
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 import ai_service
+from bill_store import bill_store
+from paypal_service import (
+    paypal_service,
+    PayPalError,
+    PayPalAuthError,
+    PayPalCaptureError,
+    CurrencyConversionError,
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -285,6 +295,7 @@ def calculate_bill():
     """
     HTTP API endpoint for bill calculations.
     Validates payload and delegates to calculate_bill_split().
+    Saves calculated bill to persistent server store for PayPal individual checkout.
     """
     try:
         data = request.get_json(silent=True)
@@ -302,12 +313,324 @@ def calculate_bill():
             tax_percentage=tax_pct,
             tip_percentage=tip_pct
         )
+
+        # Persist bill to server database for tamper-proof individual payments
+        title = (data.get("title") or "Restaurant Dining Split").strip()
+        bill_id = (data.get("bill_id") or "").strip()
+        if not bill_id:
+            bill_id = f"bill_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+
+        bill_store.save_bill(bill_id, title, result["summary"], result["breakdown"])
+        result["bill_id"] = bill_id
+        result["title"] = title
+        result["settlement"] = bill_store.get_settlement_summary(bill_id)
+
         return jsonify(result), 200
 
     except ValueError as val_err:
         return jsonify({"success": False, "error": str(val_err)}), 400
     except Exception as e:
         return jsonify({"success": False, "error": f"An unexpected error occurred: {str(e)}"}), 500
+
+
+@app.route("/api/paypal/config", methods=["GET"])
+def paypal_config():
+    """Returns public PayPal configuration (client_id, currency, inr_to_usd_rate)."""
+    return jsonify(paypal_service.get_public_config()), 200
+
+
+@app.route("/api/paypal/create-order", methods=["POST"])
+def paypal_create_order():
+    """
+    Creates an individual PayPal order for a single member's share.
+    Strictly calculates the amount server-side from persistent bill records.
+    Never trusts amounts sent by frontend JavaScript.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        bill_id = (data.get("bill_id") or "").strip()
+        member_name = (data.get("member_name") or "").strip()
+
+        if not bill_id or not member_name:
+            return jsonify({"success": False, "error": "Both bill_id and member_name are required."}), 400
+
+        if not paypal_service.is_configured():
+            return jsonify({
+                "success": False,
+                "error": "PayPal checkout is not configured. Please ensure PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET are set."
+            }), 400
+
+        # 1. Fetch server-side member share (tamper-proof)
+        member = bill_store.get_member(bill_id, member_name)
+        if not member:
+            return jsonify({
+                "success": False,
+                "error": f"Member '{member_name}' not found for bill '{bill_id}'."
+            }), 404
+
+        # 2. Duplicate payment prevention: already paid members cannot pay again
+        if member["status"] == "paid":
+            return jsonify({
+                "success": False,
+                "error": f"{member_name} has already paid their share."
+            }), 400
+
+        amount_inr = member["share_inr"]
+        if amount_inr <= 0:
+            return jsonify({
+                "success": False,
+                "error": f"{member_name}'s calculated share is ₹0.00. No payment required."
+            }), 400
+
+        # 3. Server-side currency conversion
+        amount_usd, usd_str = paypal_service.convert_inr_to_usd(amount_inr)
+
+        # 4. Fetch bill title
+        bill = bill_store.get_bill(bill_id)
+        title = bill["title"] if bill else "Restaurant Dining Split"
+
+        # 5. Create PayPal Order with CAPTURE intent
+        order_data = paypal_service.create_individual_order(
+            amount_usd=amount_usd,
+            member_name=member["member_name"],
+            bill_title=title,
+            bill_id=bill_id
+        )
+
+        # 6. Bind order strictly to (bill_id, member_name, amount) in server store
+        bill_store.record_paypal_order(
+            order_id=order_data["order_id"],
+            bill_id=bill_id,
+            member_name=member["member_name"],
+            amount_inr=amount_inr,
+            amount_usd=amount_usd,
+            currency="USD"
+        )
+
+        return jsonify({
+            "success": True,
+            "orderID": order_data["order_id"],
+            "bill_id": bill_id,
+            "member_name": member["member_name"],
+            "amount_usd": amount_usd,
+            "amount_usd_formatted": f"${amount_usd:.2f}",
+            "amount_inr": amount_inr,
+            "amount_inr_formatted": f"₹{amount_inr:,.2f}",
+            "currency": "USD"
+        }), 200
+
+    except CurrencyConversionError as conv_err:
+        return jsonify({"success": False, "error": str(conv_err)}), 400
+    except PayPalAuthError as auth_err:
+        return jsonify({"success": False, "error": str(auth_err)}), 401
+    except PayPalError as pay_err:
+        return jsonify({"success": False, "error": str(pay_err)}), 502
+    except Exception as e:
+        return jsonify({"success": False, "error": f"An unexpected error occurred: {str(e)}"}), 500
+
+
+@app.route("/api/paypal/capture-order", methods=["POST"])
+def paypal_capture_order():
+    """
+    Captures an approved PayPal order for an individual member.
+    Verifies order_id against the server's record, checks that the captured amount matches,
+    and updates only that member's status to 'paid'.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        order_id = (data.get("order_id") or "").strip()
+        bill_id = (data.get("bill_id") or "").strip()
+        member_name = (data.get("member_name") or "").strip()
+
+        if not order_id or not bill_id or not member_name:
+            return jsonify({
+                "success": False,
+                "error": "order_id, bill_id, and member_name are all required."
+            }), 400
+
+        # 1. Lookup server-side recorded order
+        order_record = bill_store.get_paypal_order(order_id)
+        if not order_record:
+            return jsonify({
+                "success": False,
+                "error": "Unrecognized PayPal order ID. Order was not initiated by FairSplit AI."
+            }), 400
+
+        # 2. Strict tampering check: order must match bill_id and member_name
+        if order_record["bill_id"] != bill_id or order_record["member_name"].lower() != member_name.lower():
+            return jsonify({
+                "success": False,
+                "error": "Verification mismatch: PayPal order does not match this bill or member."
+            }), 400
+
+        # 3. Duplicate capture check
+        if order_record["status"] == "COMPLETED":
+            return jsonify({
+                "success": False,
+                "error": "This PayPal order has already been completed."
+            }), 400
+
+        # 4. Check if member is already marked paid
+        member = bill_store.get_member(bill_id, member_name)
+        if not member:
+            return jsonify({"success": False, "error": "Member not found on this bill."}), 404
+
+        if member["status"] == "paid":
+            return jsonify({
+                "success": False,
+                "error": f"{member_name} is already marked as paid."
+            }), 400
+
+        # 5. Capture the order via PayPal Orders API & verify amount/currency
+        expected_usd = order_record["amount_usd"]
+        capture_result = paypal_service.capture_order(order_id, expected_amount_usd=expected_usd)
+
+        # 6. Mark member as paid in the persistent database
+        bill_store.mark_member_paid(
+            bill_id=bill_id,
+            member_name=member["member_name"],
+            order_id=order_id,
+            capture_id=capture_result["capture_id"],
+            amount_usd=capture_result["amount_usd"],
+            payer_email=capture_result.get("payer_email")
+        )
+
+        # 7. Get updated settlement summary (total collected, total outstanding, progress)
+        settlement = bill_store.get_settlement_summary(bill_id)
+
+        return jsonify({
+            "success": True,
+            "status": "COMPLETED",
+            "bill_id": bill_id,
+            "member_name": member["member_name"],
+            "amount_usd": capture_result["amount_usd"],
+            "amount_usd_formatted": f"${capture_result['amount_usd']:.2f}",
+            "capture_id": capture_result["capture_id"],
+            "payer_email": capture_result.get("payer_email"),
+            "payer_name": capture_result.get("payer_name"),
+            "settlement": settlement
+        }), 200
+
+    except PayPalCaptureError as cap_err:
+        return jsonify({"success": False, "error": str(cap_err)}), 400
+    except PayPalAuthError as auth_err:
+        return jsonify({"success": False, "error": str(auth_err)}), 401
+    except PayPalError as pay_err:
+        return jsonify({"success": False, "error": str(pay_err)}), 502
+    except Exception as e:
+        return jsonify({"success": False, "error": f"An unexpected error occurred: {str(e)}"}), 500
+
+
+@app.route("/api/bills/<bill_id>", methods=["GET"])
+def get_bill_status(bill_id):
+    """Retrieves latest server-side bill data and settlement status."""
+    bill = bill_store.get_bill(bill_id)
+    if not bill:
+        return jsonify({"success": False, "error": "Bill not found."}), 404
+    settlement = bill_store.get_settlement_summary(bill_id)
+    return jsonify({"success": True, "bill": bill, "settlement": settlement}), 200
+
+
+@app.route("/api/bills/<bill_id>/settle-offline", methods=["POST"])
+def settle_member_offline(bill_id):
+    """
+    HTTP API endpoint to record an offline payment (Cash, UPI, Direct Transfer)
+    for an individual member without initiating a PayPal transaction.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        member_name = (data.get("member_name") or "").strip()
+
+        if not bill_id or not member_name:
+            return jsonify({
+                "success": False,
+                "error": "bill_id and member_name are required."
+            }), 400
+
+        member = bill_store.get_member(bill_id, member_name)
+        if not member:
+            return jsonify({"success": False, "error": f"Member '{member_name}' not found on this bill."}), 404
+
+        if member["status"] == "paid":
+            return jsonify({
+                "success": False,
+                "error": f"{member_name} is already marked as paid."
+            }), 400
+
+        success = bill_store.mark_member_offline_paid(bill_id, member["member_name"])
+        if not success:
+            return jsonify({"success": False, "error": "Failed to record offline payment."}), 500
+
+        settlement = bill_store.get_settlement_summary(bill_id)
+        return jsonify({
+            "success": True,
+            "bill_id": bill_id,
+            "member_name": member["member_name"],
+            "status": "paid",
+            "payment_method": "offline",
+            "settlement": settlement
+        }), 200
+
+    except Exception as e:
+        return jsonify({"success": False, "error": f"An unexpected error occurred: {str(e)}"}), 500
+
+
+@app.route("/api/bills/<bill_id>/revert-offline", methods=["POST"])
+def revert_member_offline(bill_id):
+    """
+    HTTP API endpoint to revert an accidental offline payment back to pending.
+    Strictly verifies payment_method == 'offline'. Reverting PayPal captures via this endpoint is prohibited.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        member_name = (data.get("member_name") or "").strip()
+
+        if not bill_id or not member_name:
+            return jsonify({
+                "success": False,
+                "error": "bill_id and member_name are required."
+            }), 400
+
+        member = bill_store.get_member(bill_id, member_name)
+        if not member:
+            return jsonify({"success": False, "error": f"Member '{member_name}' not found on this bill."}), 404
+
+        if member["status"] != "paid":
+            return jsonify({
+                "success": False,
+                "error": f"{member_name} is not currently marked as paid."
+            }), 400
+
+        # Disallow reverting PayPal payments through offline endpoint
+        if member.get("payment_method") == "paypal" or member.get("paypal_order_id") or member.get("paypal_capture_id"):
+            return jsonify({
+                "success": False,
+                "error": "Cannot revert a payment completed through PayPal."
+            }), 400
+
+        if member.get("payment_method") != "offline":
+            return jsonify({
+                "success": False,
+                "error": "Only offline/cash payments can be reverted here."
+            }), 400
+
+        success = bill_store.revert_member_offline(bill_id, member["member_name"])
+        if not success:
+            return jsonify({"success": False, "error": "Failed to revert offline payment."}), 500
+
+        settlement = bill_store.get_settlement_summary(bill_id)
+        return jsonify({
+            "success": True,
+            "bill_id": bill_id,
+            "member_name": member["member_name"],
+            "status": "pending",
+            "payment_method": None,
+            "settlement": settlement
+        }), 200
+
+    except Exception as e:
+        return jsonify({"success": False, "error": f"An unexpected error occurred: {str(e)}"}), 500
+
 
 
 @app.route("/api/ai/assign", methods=["POST"])

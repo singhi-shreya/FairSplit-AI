@@ -488,11 +488,11 @@ h1, h2, h3, h4, h5, h6 {
     font-weight: 600;
 }
 
-/* Overview Stat Cards (3-Column Grid) */
+/* Overview Stat Cards (4-Column Grid) */
 .stats-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 1.5rem;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.25rem;
     margin-bottom: 2.25rem;
 }
 
@@ -2237,6 +2237,347 @@ textarea:focus {
     color: var(--success);
 }
 
+/* Settlement Financial Amounts Summary */
+.settlement-amounts-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.settlement-metric-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.65rem;
+    border-radius: var(--radius-full);
+    font-size: 0.73rem;
+    font-weight: 600;
+}
+
+.settlement-metric-chip i {
+    width: 14px;
+    height: 14px;
+}
+
+.settlement-metric-chip.collected {
+    background-color: var(--light-emerald);
+    color: var(--deep-emerald);
+    border: 1px solid rgba(35, 122, 91, 0.25);
+}
+
+.settlement-metric-chip.collected strong {
+    color: var(--primary-emerald);
+}
+
+.settlement-metric-chip.outstanding {
+    background-color: #FEF3C7;
+    color: #92400E;
+    border: 1px solid rgba(217, 119, 6, 0.25);
+}
+
+.settlement-metric-chip.outstanding strong {
+    color: #B45309;
+}
+
+/* PayPal Disclosure Banner */
+.paypal-disclosure-pill {
+    background-color: var(--light-emerald);
+    border: 1px solid rgba(35, 122, 91, 0.25);
+    border-radius: var(--radius-md);
+    padding: 0.85rem 1rem;
+    margin-bottom: 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    box-shadow: var(--shadow-subtle);
+}
+
+.paypal-pill-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background-color: var(--primary-emerald);
+    color: var(--card-white);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.paypal-pill-icon i {
+    width: 18px;
+    height: 18px;
+}
+
+.paypal-pill-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    flex: 1;
+}
+
+.paypal-pill-content strong {
+    font-size: 0.84rem;
+    color: var(--deep-emerald);
+    font-weight: 700;
+}
+
+.paypal-pill-content span {
+    font-size: 0.76rem;
+    color: var(--dark-charcoal);
+    line-height: 1.35;
+}
+
+.paypal-mode-tag {
+    background-color: var(--primary-emerald);
+    color: var(--card-white);
+    padding: 0.25rem 0.65rem;
+    border-radius: var(--radius-full);
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+}
+
+/* Settlement Channel Breakdown */
+.settlement-channel-breakdown {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    margin-top: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.channel-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.65rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.76rem;
+    font-weight: 600;
+}
+
+.channel-chip i {
+    width: 14px;
+    height: 14px;
+}
+
+.channel-chip.paypal {
+    border: 1px solid rgba(0, 112, 186, 0.25);
+    color: #003087;
+    background-color: rgba(0, 112, 186, 0.08);
+}
+
+.channel-chip.offline {
+    border: 1px solid rgba(35, 122, 91, 0.25);
+    color: var(--deep-emerald);
+    background-color: rgba(35, 122, 91, 0.08);
+}
+
+/* Individual Member Payment Options Container */
+.member-payment-options {
+    margin-top: 0.85rem;
+    background-color: var(--card-white);
+    border: 1px solid var(--soft-border);
+    border-radius: var(--radius-md);
+    padding: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    transition: all var(--transition-fast);
+}
+
+.member-payment-options:hover {
+    border-color: var(--soft-border-hover);
+}
+
+.payment-method-box {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.payment-method-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: var(--dark-charcoal);
+}
+
+.payment-method-header .method-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: var(--deep-emerald);
+}
+
+.payment-method-header .method-tag i {
+    width: 13px;
+    height: 13px;
+}
+
+.payment-method-header .method-amount-usd {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--primary-emerald);
+    background-color: var(--light-emerald);
+    padding: 0.12rem 0.45rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(35, 122, 91, 0.2);
+}
+
+.payment-method-header .method-amount-inr {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    color: var(--deep-emerald);
+    font-size: 0.85rem;
+}
+
+.paypal-btn-slot {
+    min-height: 38px;
+    margin-top: 0.2rem;
+}
+
+.paypal-btn-slot:empty {
+    min-height: 0;
+}
+
+.paypal-inactive-note {
+    font-size: 0.72rem;
+    color: var(--muted-grey);
+    font-style: italic;
+}
+
+.payment-options-divider {
+    display: flex;
+    align-items: center;
+    text-align: center;
+    color: var(--muted-grey);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    margin: 0.15rem 0;
+}
+
+.payment-options-divider::before,
+.payment-options-divider::after {
+    content: '';
+    flex: 1;
+    border-bottom: 1px dashed var(--soft-border);
+}
+
+.payment-options-divider span {
+    padding: 0 0.6rem;
+}
+
+.btn-offline-settle {
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.55rem 0.85rem;
+    background: linear-gradient(180deg, #FAFCFA 0%, #EBF6F0 100%);
+    border: 1px solid rgba(35, 122, 91, 0.35);
+    border-radius: var(--radius-sm);
+    color: var(--deep-emerald);
+    font-family: var(--font-body);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.btn-offline-settle:hover {
+    background: linear-gradient(180deg, #EBF6F0 0%, #D8EDE1 100%);
+    border-color: var(--primary-emerald);
+    box-shadow: 0 2px 6px rgba(35, 122, 91, 0.12);
+}
+
+.btn-offline-settle i {
+    width: 15px;
+    height: 15px;
+}
+
+/* Settled Status Boxes (Distinct for PayPal vs Offline) */
+.payment-settled-box {
+    margin-top: 0.85rem;
+    padding: 0.75rem 0.9rem;
+    border-radius: var(--radius-md);
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    animation: fadeInView var(--transition-fast);
+}
+
+.payment-settled-box.paypal-settled {
+    background-color: rgba(0, 112, 186, 0.06);
+    border: 1px solid rgba(0, 112, 186, 0.25);
+}
+
+.payment-settled-box.offline-settled {
+    background-color: var(--success-light);
+    border: 1px solid rgba(21, 128, 61, 0.25);
+}
+
+.payment-settled-box .settled-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.84rem;
+    font-weight: 700;
+}
+
+.payment-settled-box.paypal-settled .settled-badge {
+    color: #003087;
+}
+
+.payment-settled-box.offline-settled .settled-badge {
+    color: var(--success);
+}
+
+.payment-settled-box .settled-badge i {
+    width: 16px;
+    height: 16px;
+}
+
+.payment-settled-box .settled-meta {
+    font-size: 0.74rem;
+    color: var(--dark-charcoal);
+}
+
+.btn-revert-offline {
+    align-self: flex-start;
+    margin-top: 0.2rem;
+    background: none;
+    border: none;
+    color: var(--muted-grey);
+    font-size: 0.72rem;
+    font-weight: 500;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.15rem 0.3rem;
+    border-radius: var(--radius-sm);
+    transition: color var(--transition-fast);
+}
+
+.btn-revert-offline:hover {
+    color: #DC2626;
+    text-decoration: underline;
+}
+
+.btn-revert-offline i {
+    width: 12px;
+    height: 12px;
+}
+
 /* ==========================================================================
    MY BILLS / HISTORY VIEW
    ========================================================================== */
@@ -2497,7 +2838,7 @@ textarea:focus {
         position: static;
     }
     .stats-grid {
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(2, 1fr);
     }
     .quick-actions-grid {
         grid-template-columns: repeat(3, 1fr);

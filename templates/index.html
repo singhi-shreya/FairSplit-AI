@@ -128,7 +128,7 @@
                     </div>
                 </div>
 
-                <!-- Three Stat Overview Cards (Real data from localStorage) -->
+                <!-- Four Stat Overview Cards (Real data from localStorage & database) -->
                 <div class="stats-grid">
                     <!-- Stat 1: Total Bills -->
                     <div class="stat-card">
@@ -158,10 +158,24 @@
                         </div>
                     </div>
 
-                    <!-- Stat 3: Pending Payments -->
+                    <!-- Stat 3: Total Collected -->
                     <div class="stat-card">
                         <div class="stat-header">
-                            <span class="stat-label">Pending Payments</span>
+                            <span class="stat-label">Total Collected</span>
+                            <div class="stat-icon-wrap stat-icon-emerald">
+                                <i data-lucide="check-circle-2"></i>
+                            </div>
+                        </div>
+                        <div class="stat-body">
+                            <span class="stat-value" id="dashTotalCollected">₹0.00</span>
+                            <span class="stat-badge stat-badge-emerald" id="dashCollectedBreakdown">PayPal: ₹0.00 • Offline: ₹0.00</span>
+                        </div>
+                    </div>
+
+                    <!-- Stat 4: Total Outstanding -->
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-label">Total Outstanding</span>
                             <div class="stat-icon-wrap stat-icon-cream">
                                 <i data-lucide="clock"></i>
                             </div>
@@ -760,15 +774,41 @@
                                     </div>
                                 </div>
 
-                                <!-- Settlement Progress Bar -->
+                                <!-- Settlement Progress Bar & Financial Status -->
                                 <div class="settlement-progress-container" id="settlementProgressContainer">
                                     <div class="settlement-progress-header">
-                                        <span class="progress-title">Settlement Status</span>
-                                        <span class="progress-ratio" id="settlementProgressRatio">0 of 0 Settled (0%)</span>
+                                        <div>
+                                            <span class="progress-title">Settlement Status</span>
+                                            <span class="progress-ratio" id="settlementProgressRatio">0 of 0 Settled (0%)</span>
+                                        </div>
+                                        <div class="settlement-amounts-summary">
+                                            <span class="settlement-metric-chip collected">
+                                                <i data-lucide="check-circle-2"></i> Collected: <strong id="settlementCollectedAmount">₹0.00</strong>
+                                            </span>
+                                            <span class="settlement-metric-chip outstanding">
+                                                <i data-lucide="clock"></i> Outstanding: <strong id="settlementOutstandingAmount">₹0.00</strong>
+                                            </span>
+                                        </div>
                                     </div>
                                     <div class="progress-track">
                                         <div class="progress-bar" id="settlementProgressBar" style="width: 0%;"></div>
                                     </div>
+                                    <div class="settlement-channel-breakdown" id="settlementChannelBreakdown">
+                                        <span class="channel-chip paypal"><i data-lucide="credit-card"></i> PayPal: <strong id="settlementPaypalCollected">₹0.00</strong></span>
+                                        <span class="channel-chip offline"><i data-lucide="banknote"></i> Cash / Offline: <strong id="settlementOfflineCollected">₹0.00</strong></span>
+                                    </div>
+                                </div>
+
+                                <!-- Payment Options Disclosure -->
+                                <div class="paypal-disclosure-pill" id="paypalDisclosureBanner">
+                                    <div class="paypal-pill-icon">
+                                        <i data-lucide="shield-check"></i>
+                                    </div>
+                                    <div class="paypal-pill-content">
+                                        <strong id="paypalDisclosureTitle">Payment Options: PayPal Checkout &amp; Cash / Offline Settlement</strong>
+                                        <span id="paypalDisclosureText">Each person can settle their own exact share with PayPal Sandbox, or be marked as settled via Cash, UPI, or offline transfer.</span>
+                                    </div>
+                                    <span class="paypal-mode-tag" id="paypalModeBadge">Sandbox Mode</span>
                                 </div>
 
                                 <!-- Results Action Bar (Copy & Save) -->
@@ -936,6 +976,41 @@
                         <button type="button" class="btn btn-outline btn-sm btn-danger-text" id="clearAllHistoryBtn">
                             <i data-lucide="trash-2"></i> Clear All Local Bill History
                         </button>
+                    </div>
+
+                    <!-- Card 5: PayPal Sandbox Integration -->
+                    <div class="card settings-card">
+                        <div class="card-header">
+                            <div class="stat-icon-wrap stat-icon-emerald">
+                                <i data-lucide="credit-card"></i>
+                            </div>
+                            <div>
+                                <h3 class="card-title">PayPal Sandbox Gateway</h3>
+                                <p class="section-desc">Live status of individual member payment checkout.</p>
+                            </div>
+                        </div>
+                        <div class="settings-info-list" id="paypalSettingsList">
+                            <div class="settings-info-item">
+                                <span>Status</span>
+                                <strong id="settingsPaypalStatus" class="badge-tag-success">Checking...</strong>
+                            </div>
+                            <div class="settings-info-item">
+                                <span>Environment</span>
+                                <strong id="settingsPaypalMode">SANDBOX</strong>
+                            </div>
+                            <div class="settings-info-item">
+                                <span>Payment Model</span>
+                                <strong>Individual Member Shares (No pooled payment)</strong>
+                            </div>
+                            <div class="settings-info-item">
+                                <span>Configured Rate</span>
+                                <strong id="settingsPaypalRate">Loading...</strong>
+                            </div>
+                            <div class="settings-info-item">
+                                <span>Tamper Protection</span>
+                                <strong>Server-side Calculation &amp; Order Capture</strong>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </section>
